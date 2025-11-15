@@ -1,0 +1,36 @@
+ Idea for the main story to follow, in order to answer particular questions with our data analysis.
+
+ “Früherkennung und Risikostratifikation von Herzkrankheiten”
+Ausgangslage (Realistischer Klinik-Use-Case)
+Ein regionales Spital möchte seine Präventionsarbeit verbessern und Patienten
+mit erhöhtem Herzkrankheitsrisiko frühzeitig identifizieren.
+
+Bisher erfolgt die Risikoabschätzung hauptsächlich durch Ärzte auf Basis einzelner Faktoren (Alter, BMI, Blutdruck).
+Das Spital möchte jedoch verstehen:
+- Welche Faktoren das Herzkrankheitsrisiko am stärksten beeinflussen
+- Wie sich diese Faktoren gegenseitig verstärken oder abschwächen
+- Ob moderne Machine-Learning-Modelle bessere Vorhersagen liefern als klassische Statistik
+- Ab welchen Schwellenwerten das Risiko signifikant steigt
+- Wie Patienten gezielt präventiv betreut werden können
+Dafür beauftragt das Spital unser Projektteam, den Person-Health-Indicator-Datensatz zu analysieren.
+
+Übergeordnete Fragestellung des Projekts
+„Wie gut lässt sich das Risiko für Herzkrankheiten anhand persönlicher Gesundheitsindikatoren vorhersagen,
+und welche Faktoren haben den stärksten Einfluss?“
+
+Wir beantworten diese Frage in zwei Dimensionen:
+I. Risikovorhersage (Predictive Task)
+Kann ein Modell zuverlässig Patienten mit erhöhtem Risiko identifizieren?
+→ dafür: GLM Binomial, SVM, Neural Network
+II. Risikoerklärung (Interpretation Task)
+Welche Faktoren treiben das Risiko, und wie verlaufen diese Effekte?
+→ dafür: Linear Model, Poisson GLM, GAM
+
+Was das Spital am Ende konkret erhält
+Eine klare, klinisch nutzbare Antwort:
+- Frühwarnmodell: Wer ist gefährdet?
+- Top-5 Hauptrisikofaktoren: Was treibt das Risiko?
+- Schwellenwerte: Ab wann wird ein Faktor kritisch?
+- Empfehlungen: Wo lohnt sich Patientenintervention (Bewegung, BMI, Schlaf)?
+- Modellvergleich: Welches Modell ist am zuverlässigsten?
+
