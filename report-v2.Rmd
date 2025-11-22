@@ -1,0 +1,334 @@
+---
+title: "Early detection and risk stratification of heart disease"
+author: "Luca Signorini, Samuel Frei, Julia Studer"
+date: "15.11.2025"
+output:
+  html_document:
+    highlight: tango   # for line numbering to work
+---
+
+
+
+
+# Introduction
+
+Motivation, research question, context
+
+Use case: A regional hospital wants to improve its preventive care and identify patients with an increased risk of heart disease at an early stage.
+Until now, risk assessment has mainly been carried out by doctors on the basis of individual factors (age, BMI, blood pressure). However, the hospital wants to understand:
+Which factors have the greatest influence on the risk of heart disease
+How these factors reinforce or weaken each other
+Whether modern machine learning models provide better predictions than traditional statistics
+At what thresholds the risk increases significantly
+How patients can be given targeted preventive care
+To this end, the hospital has commissioned our project team to analyze the Person Health Indicator dataset.
+
+The overarching question of the project
+“How well can the risk of heart disease be predicted using personal health indicators, and which factors have the strongest influence?”
+We answer this question in two dimensions:
+I. Risk prediction (predictive task)
+Can a model reliably identify patients at increased risk?
+→ For this: GLM Binomial, SVM, Neural Network
+II. Risk explanation (interpretation task)
+Which factors drive the risk, and how do these effects unfold?
+→ For this: Linear Model, Poisson GLM, GAM 
+
+What the hospital ultimately receives
+A clear, clinically useful answer:
+Early warning model: Who is at risk?
+Top 5 main risk factors: What drives the risk?
+Threshold values: When does a factor become critical?
+Recommendations: Where is patient intervention worthwhile (exercise, BMI, sleep)?
+Model comparison: Which model is the most reliable?
+
+<br>
+--------------------------------------------------------------------------------
+
+<br>
+
+# 1. Data Preparation
+
+**Dataset:** heart_2022_no_nans.csv
+<br>
+**Source:** https://www.kaggle.com/datasets/kamilpytlak/personal-key-indicators-of-heart-disease?resource=download&select=2022
+
+After loading the dataset, we reduce both the number of variables and observations to stay within the task limits. To address the class imbalance in the target variable HadHeartAttack (more “No” than “Yes”), we apply undersampling to the majority class, achieving a 1:4 ratio between “Yes” and “No” cases.
+
+<br>
+<details>
+<summary><b>Show code: Prerequisites</b></summary>
+```{r prerequisites, cache=TRUE}
+# Prerequisites
+#install.packages("dplyr")
+library(dplyr)
+#install.packages("skimr")
+library(skimr)
+```
+</details>
+
+<details>
+<summary><b>Show code: Data import and summary</b></summary>
+```{r loading-data, cache=TRUE}
+# Loading data
+data <- read.csv("heart_2022_no_nans.csv")
+
+skim(data)
+```
+</details>
+
+```{r recode-outcome, cache=TRUE}
+# Ensure outcome is a proper binary factor
+data$HadHeartAttack <- factor(data$HadHeartAttack,
+                              levels = c("No", "Yes"))
+
+# Quick check
+str(data$HadHeartAttack)
+table(data$HadHeartAttack)
+```
+
+<details>
+
+```{r convert-types, cache=TRUE}
+data <- data %>%
+  mutate(
+    HadHeartAttack     = factor(HadHeartAttack, levels = c("No", "Yes")),
+    AgeCategory        = factor(AgeCategory),
+    Sex                = factor(Sex),
+    SmokerStatus       = factor(SmokerStatus),
+    HadDiabetes        = factor(HadDiabetes),
+    PhysicalActivities = factor(PhysicalActivities),
+    GeneralHealth      = factor(GeneralHealth),
+    DifficultyWalking  = factor(DifficultyWalking),
+    HadKidneyDisease   = factor(HadKidneyDisease),
+    CovidPos           = factor(CovidPos),
+    BMI                = as.numeric(BMI),
+    SleepHours         = as.numeric(SleepHours)
+  )
+
+str(data$AgeCategory)
+```
+
+<summary><b>Show code: Select predictors</b></summary>
+```{r select-predictors, cache=TRUE}
+# Keep only 10 selected predictors = 11 variables
+df <- data.frame(data$HadHeartAttack,
+                 data$AgeCategory,
+                 data$Sex,
+                 data$BMI,
+                 data$SmokerStatus,
+                 data$HadDiabetes,
+                 data$PhysicalActivities,
+                 data$GeneralHealth,
+                 data$SleepHours,
+                 data$DifficultyWalking,
+                 data$HadKidneyDisease,
+                 data$CovidPos)
+```
+</details>
+
+<details>
+<summary><b>Show code: Handling class imbalance</b></summary>
+```{r handling-class-imbalance, cache=TRUE}
+
+set.seed(123)
+
+
+minority <- data %>% filter(HadHeartAttack == "Yes")
+majority <- data %>% filter(HadHeartAttack == "No")
+
+
+ratio <- 4   # 4:1 majority : minority
+
+
+majority_under <- majority %>% sample_n(nrow(minority) * ratio)
+
+#combine undersampled majority with minority
+data <- bind_rows(minority, majority_under)
+
+#check new class distribution
+table(data$HadHeartAttack)
+
+#sumary of reduced dataset
+skim(data)
+```
+
+</details>
+
+```{r split, cache=TRUE}
+set.seed(123)
+library(caret)
+
+train_index <- createDataPartition(data$HadHeartAttack, p = 0.7, list = FALSE)
+
+train <- data[train_index, ]
+test  <- data[-train_index, ]
+```
+
+--------------------------------------------------------------------------------
+
+<br>
+
+# 2. Data Visualization
+
+Here the visualization of our dataset is described.
+
+<br>
+
+--------------------------------------------------------------------------------
+
+<br>
+
+# 3. Methods 
+### Data Preparation
+**Handling Class Imbalance in the Target Variable**
+
+In the original dataset, the outcome variable HadHeartAttack is highly imbalanced, with only a small fraction of participants reporting a past heart attack. This imbalance poses a major challenge for predictive models: Without correction, most models learn to simply predict “No heart attack” for all cases. While this can still produce a high overall accuracy, such models fail exactly where the hospital needs them most — identifying patients at increased cardiovascular risk.
+
+Due to the large sample size of the provided dataset, we were required to use the undersampling method to achieve a 4:1 ratio of our target variable - 'HadHeartAttack' - as well as to meet the dataset size prerequisites. From an initial sample size of over 200'000, we reduced it to about 67'000, of which 53'740 did not have a heart attack and 13'435 did.
+
+
+
+Description of the models 
+
+## 3.1. Risk prediction: Can a model reliably identify patients at increased risk?
+
+### Generalized linear model Binomial
+
+Samuel
+
+```{r glm-binomial, cache=TRUE}
+glm_bin <- glm(
+  HadHeartAttack ~ AgeCategory + Sex + BMI + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    SleepHours + DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train,
+  family = binomial
+)
+
+summary(glm_bin)
+```
+
+```{r glm-roc, cache=TRUE}
+library(pROC)
+
+prob_glm <- predict(glm_bin, newdata = test, type = "response")
+
+roc_glm <- roc(test$HadHeartAttack, prob_glm)
+
+plot(roc_glm, main = "ROC Curve — GLM Binomial")
+auc(roc_glm)
+```
+
+```{r glm-bmi-curve, cache=TRUE}
+bmi_grid <- data.frame(
+  BMI                = seq(15, 50, length.out = 150),
+  AgeCategory        = levels(train$AgeCategory)[1],
+  Sex                = levels(train$Sex)[1],
+  SmokerStatus       = levels(train$SmokerStatus)[1],
+  HadDiabetes        = levels(train$HadDiabetes)[1],
+  PhysicalActivities = levels(train$PhysicalActivities)[1],
+  GeneralHealth      = levels(train$GeneralHealth)[1],
+  SleepHours         = 7,
+  DifficultyWalking  = levels(train$DifficultyWalking)[1],
+  HadKidneyDisease   = levels(train$HadKidneyDisease)[1],
+  CovidPos           = levels(train$CovidPos)[1]
+)
+
+bmi_grid$prob <- predict(glm_bin, newdata = bmi_grid, type = "response")
+
+plot(
+  bmi_grid$BMI, bmi_grid$prob, type = "l", lwd = 2,
+  xlab = "BMI", ylab = "Predicted probability",
+  main = "Predicted Heart Attack Risk vs BMI (GLM)"
+)
+```
+
+
+
+### Support Vector machines
+
+Luca
+
+### Neural Network 
+
+Julia 
+
+## 3.2. Risk explanation: Which factors drive the risk, and how do these effects unfold?
+
+### Linear Model
+
+Luca
+
+### Generalized Linear Model Poisson
+
+Julia
+
+### Generalized Additive Model
+
+Samuel
+```{r gam-binomial, cache=TRUE}
+library(mgcv)
+
+gam_bin <- bam(
+  HadHeartAttack ~
+    s(BMI, k = 10) +
+    s(SleepHours, k = 10) +
+    AgeCategory + Sex + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train,
+  family = binomial,
+  method = "fREML"
+)
+
+summary(gam_bin)
+```
+
+```{r gam-plots, fig.width=7, fig.height=6, cache=TRUE}
+plot(gam_bin, pages = 1, shade = TRUE, seWithMean = TRUE, scale = 0)
+```
+
+
+<br>
+
+--------------------------------------------------------------------------------
+
+<br>
+
+# 4. Results and Discussion
+
+Focus on main results
+• Tables and figures should provide evidence for main result
+• Precise and correct desription and interpretation of main results
+
+## 3.1. Risk prediction: Can a model reliably identify patients at increased risk?
+
+GLM Binomial (Samuel)
+
+SVM (Luca)
+
+NN (Julia)
+
+## 3.2. Risk explanation: Which factors drive the risk, and how do these effects unfold?
+
+LM (Luca)
+
+GLM Poisson (Julia)
+
+GAM (Samuel)
+
+<br>
+
+--------------------------------------------------------------------------------
+
+<br>
+
+# 5. Conclusion
+
+• Summary of most important findings
+• Put findings into a broader context
+• Ideas for further research
+
+<br>
+
+--------------------------------------------------------------------------------
