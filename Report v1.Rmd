@@ -48,11 +48,77 @@ Model comparison: Which model is the most reliable?
 
 # 1. Data Preparation
 
-Origin of the dataset, 
-preparation of the original dataset for our analysis is described.
+**Dataset:** heart_2022_no_nans.csv
+<br>
+**Source:** https://www.kaggle.com/datasets/kamilpytlak/personal-key-indicators-of-heart-disease?resource=download&select=2022
+
+After loading the dataset, we reduce both the number of variables and observations to stay within the task limits. To address the class imbalance in the target variable HadHeartAttack (more “No” than “Yes”), we apply undersampling to the majority class, achieving a 1:4 ratio between “Yes” and “No” cases.
 
 <br>
+<details>
+<summary><b>Show code: Prerequisites</b></summary>
+```{r prerequisites, cache=TRUE}
+# Prerequisites
+#install.packages("dplyr")
+library(dplyr)
+#install.packages("skimr")
+library(skimr)
+```
+</details>
 
+<details>
+<summary><b>Show code: Data import and summary</b></summary>
+```{r loading-data, cache=TRUE}
+# Loading data
+data <- read.csv(file = "/Users/lucasignorini/Documents/MSc_ids/Sem_3/ML1/Gruppenarbeit/Data/archive/2022/heart_2022_no_nans.csv")
+skim(data)
+```
+</details>
+
+<details>
+<summary><b>Show code: Select predictors</b></summary>
+```{r select-predictors, cache=TRUE}
+# Keep only 10 selected predictors = 11 variables
+df <- data.frame(data$HadHeartAttack,
+                 data$AgeCategory,
+                 data$Sex,
+                 data$BMI,
+                 data$SmokerStatus,
+                 data$HadDiabetes,
+                 data$PhysicalActivities,
+                 data$GeneralHealth,
+                 data$SleepHours,
+                 data$DifficultyWalking,
+                 data$HadKidneyDisease,
+                 data$CovidPos)
+```
+</details>
+
+<details>
+<summary><b>Show code: Handling class imbalance</b></summary>
+```{r handling-class-imbalance, cache=TRUE}
+
+# Handling Class Imbalance
+set.seed(123)
+minority <- df %>% filter(data$HadHeartAttack == "Yes")
+majority <- df %>% filter(data$HadHeartAttack == "No")
+
+# choose ratio
+ratio <- 4   # 4:1 majority:minority
+
+# Sample majority to match ratio
+majority_under <- majority %>% sample_n(nrow(minority) * ratio)
+
+# Combine undersampled majority with minority
+df_reduced <- bind_rows(minority, majority_under)
+
+# Print amount of HadHeartAttack "Yes" & "No"
+table(df_reduced$data.HadHeartAttack)
+
+# Show Summary of reduced Dataset
+skim(df_reduced)
+```
+</details>
 --------------------------------------------------------------------------------
 
 <br>
@@ -68,6 +134,14 @@ Here the visualization of our dataset is described.
 <br>
 
 # 3. Methods 
+### Data Preparation
+**Handling Class Imbalance in the Target Variable**
+
+In the original dataset, the outcome variable HadHeartAttack is highly imbalanced, with only a small fraction of participants reporting a past heart attack. This imbalance poses a major challenge for predictive models: Without correction, most models learn to simply predict “No heart attack” for all cases. While this can still produce a high overall accuracy, such models fail exactly where the hospital needs them most — identifying patients at increased cardiovascular risk.
+
+Due to the large sample size of the provided dataset, we were required to use the undersampling method to achieve a 4:1 ratio of our target variable - 'HadHeartAttack' - as well as to meet the dataset size prerequisites. From an initial sample size of over 200'000, we reduced it to about 67'000, of which 53'740 did not have a heart attack and 13'435 did.
+
+
 
 Description of the models 
 
