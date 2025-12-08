@@ -52,7 +52,7 @@ Model comparison: Which model is the most reliable?
 <br>
 **Source:** https://www.kaggle.com/datasets/kamilpytlak/personal-key-indicators-of-heart-disease?resource=download&select=2022
 
-After loading the dataset, we reduce both the number of variables and observations to stay within the task limits. To address the class imbalance in the target variable HadHeartAttack (more “No” than “Yes”), we apply undersampling to the majority class, achieving a 1:4 ratio between “Yes” and “No” cases.
+After loading the dataset, we reduce both the number of variables and observations to stay within the task limits. To address the class imbalance in the target variable HadHeartAttack (more “No” than “Yes”), we apply undersampling to the majority class, achieving a 1:4 ratio between “Yes” and “No” cases. After this we split the remaining Set in a Training and Testing Set of ration 70:30.
 
 <br>
 <details>
@@ -75,7 +75,6 @@ data <- read.csv(file = "/Users/lucasignorini/Documents/MSc_ids/Sem_3/ML1/Gruppe
 
 skim(data)
 ```
-</details>
 
 ```{r recode-outcome, cache=TRUE}
 # Ensure outcome is a proper binary factor
@@ -86,9 +85,10 @@ data$HadHeartAttack <- factor(data$HadHeartAttack,
 str(data$HadHeartAttack)
 table(data$HadHeartAttack)
 ```
+</details>
 
 <details>
-
+<summary><b>Show code: Convert-types</b></summary>
 ```{r convert-types, cache=TRUE}
 data <- data %>%
   mutate(
@@ -108,22 +108,28 @@ data <- data %>%
 
 str(data$AgeCategory)
 ```
+</details>
 
+<details>
 <summary><b>Show code: Select predictors</b></summary>
 ```{r select-predictors, cache=TRUE}
 # Keep only 11 selected predictors = 12 variables
-df <- data.frame(data$HadHeartAttack,
-                 data$AgeCategory,
-                 data$Sex,
-                 data$BMI,
-                 data$SmokerStatus,
-                 data$HadDiabetes,
-                 data$PhysicalActivities,
-                 data$GeneralHealth,
-                 data$SleepHours,
-                 data$DifficultyWalking,
-                 data$HadKidneyDisease,
-                 data$CovidPos)
+df <- data %>%
+  select(
+    HadHeartAttack,
+    AgeCategory,
+    Sex,
+    BMI,
+    SmokerStatus,
+    HadDiabetes,
+    PhysicalActivities,
+    GeneralHealth,
+    SleepHours,
+    DifficultyWalking,
+    HadKidneyDisease,
+    CovidPos
+  )
+
 ```
 </details>
 
@@ -133,28 +139,25 @@ df <- data.frame(data$HadHeartAttack,
 
 set.seed(123)
 
+minority <- df %>% filter(HadHeartAttack == "Yes")
+majority <- df %>% filter(HadHeartAttack == "No")
 
-minority <- data %>% filter(HadHeartAttack == "Yes")
-majority <- data %>% filter(HadHeartAttack == "No")
-
-
-ratio <- 4   # 4:1 majority : minority
-
+ratio <- 4  # majority : minority = 4 : 1
 
 majority_under <- majority %>% sample_n(nrow(minority) * ratio)
 
-#combine undersampled majority with minority
-data <- bind_rows(minority, majority_under)
+df_balanced <- bind_rows(minority, majority_under)
 
-#check new class distribution
+# Overwrite name so colleague's code still works:
+data <- df_balanced
+
+# Check new distribution
 table(data$HadHeartAttack)
-
-#sumary of reduced dataset
-skim(data)
 ```
-
 </details>
 
+<details>
+<summary><b>Show code: Split Data in Test and Train Set</b></summary>
 ```{r split, cache=TRUE}
 set.seed(123)
 library(caret)
@@ -163,8 +166,10 @@ train_index <- createDataPartition(data$HadHeartAttack, p = 0.7, list = FALSE)
 
 train <- data[train_index, ]
 test  <- data[-train_index, ]
-```
 
+
+```
+</details>
 --------------------------------------------------------------------------------
 
 <br>
@@ -189,7 +194,6 @@ Due to the large sample size of the provided dataset, we were required to use th
 
 
 
-Description of the models 
 
 ## 3.1. Risk prediction: Can a model reliably identify patients at increased risk?
 
@@ -244,11 +248,248 @@ plot(
 )
 ```
 
-
+--------------------------------------------------------------------------------
 
 ### Support Vector machines
 
-Luca
+Support Vector Machines offer a powerful alternative to traditional statistical models by allowing nonlinear decision boundaries through kernel functions. In the context of heart disease risk prediction, nonlinearities are plausible: risk factors such as age, BMI, diabetes, or general health may interact in complex ways that are not fully captured by a linear model. An SVM with a radial basis function (RBF) kernel can automatically model such interactions without needing to specify them explicitly.
+
+Our goal in applying an SVM is therefore twofold:
+
+- Evaluate whether nonlinear patterns improve prediction accuracy relative to the GLM baseline.
+- Assess the model’s ability to assign individual risk probabilities, which can support clinical risk stratification.
+
+Because RBF SVMs scale poorly to large datasets (quadratic to cubic computational complexity), we train the model on a 10,000-row subsample and use cross-validated hyperparameter tuning to optimize its performance. This approach provides a computationally feasible way to test whether more flexible nonlinear models meaningfully improve risk prediction over interpretable linear models.
+<br>
+
+<details>
+<summary><b>Show code: SVM </b></summary>
+```{r, SVM radial kernel, cache=TRUE}
+### ---------------------------------------------------------------
+### Support Vector Machine (SVM) for Heart Attack Risk Prediction
+### Nonlinear radial kernel + hyperparameter tuning
+### ---------------------------------------------------------------
+
+library(e1071)
+library(caret)
+library(pROC)
+
+# Ensure correct factor level order
+train$HadHeartAttack <- factor(train$HadHeartAttack, levels = c("No", "Yes"))
+test$HadHeartAttack  <- factor(test$HadHeartAttack,  levels = c("No", "Yes"))
+
+
+### ---------------------------------------------------------------
+### 1. Subsample the training data for computational feasibility
+### ---------------------------------------------------------------
+# Nonlinear SVMs scale poorly (O(n²–n³)), so we reduce to 10,000 rows.
+
+set.seed(123)
+sub_index <- sample(seq_len(nrow(train)), 10000)
+train_sub <- train[sub_index, ]
+
+
+### ---------------------------------------------------------------
+### 2. Hyperparameter tuning using caret (grid search)
+### ---------------------------------------------------------------
+# Why tune?
+#   - SVM performance depends heavily on C (cost) and gamma.
+#   - Default settings often perform poorly.
+#   - Grid search systematically evaluates combinations to find the best.
+
+tune_grid <- expand.grid(
+  sigma = c(0.01, 0.05, 0.1),   # controls nonlinearity ("gamma")
+  C     = c(0.5, 1, 2)          # margin penalty
+)
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 3,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary   # ensures ROC is used
+)
+
+set.seed(123)
+svm_tuned <- train(
+  HadHeartAttack ~ AgeCategory + Sex + BMI + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    SleepHours + DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train_sub,
+  method = "svmRadial",
+  tuneGrid = tune_grid,
+  metric = "ROC",     # optimization target
+  trControl = ctrl
+)
+
+svm_tuned
+# caret automatically selects the sigma and C combination with highest AUC
+
+
+### ---------------------------------------------------------------
+### 3. Train final SVM using best hyperparameters
+### ---------------------------------------------------------------
+best_sigma <- svm_tuned$bestTune$sigma
+best_C     <- svm_tuned$bestTune$C
+
+svm_final <- svm(
+  HadHeartAttack ~ AgeCategory + Sex + BMI + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    SleepHours + DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train_sub,
+  kernel = "radial",
+  gamma = best_sigma,
+  cost  = best_C,
+  probability = TRUE
+)
+
+
+### ---------------------------------------------------------------
+### 4. Predict risk probabilities on the test set
+### ---------------------------------------------------------------
+svm_pred <- predict(svm_final, newdata = test, probability = TRUE)
+svm_prob <- attr(svm_pred, "probabilities")[, "Yes"]
+
+
+### ---------------------------------------------------------------
+### 5. ROC curve and AUC
+### ---------------------------------------------------------------
+roc_svm <- roc(test$HadHeartAttack, svm_prob)
+```
+</details>
+<br>
+
+<details>
+<summary><b>Show Plot: SVM </b></summary>
+```{r, plot SVM, cache=TRUE}
+plot(
+  roc_svm,
+  col = "darkblue",
+  lwd = 2,
+  main = "ROC Curve — Tuned SVM (Radial Kernel, 10k Subsample)"
+)
+
+auc(roc_svm)
+```
+</details>
+<br>
+
+A radial SVM was trained on a 10,000-row subsample and optimized via 3-fold cross-validated grid search over C ∈ {0.5,1,2} and sigma ∈ {0.01,0.05,0.10}. The best-performing model used sigma = 0.01 and C = 0.5, achieving an AUC of 0.7987 on the test set. Although tuning improved performance relative to default settings, the SVM remained clearly below the GLM (AUC = 0.825). Sensitivity was very high (≈0.97), but specificity was low (≈0.18), indicating that the SVM tends to overpredict risk. Overall, nonlinear decision boundaries did not provide predictive advantages for this dataset, suggesting that heart attack risk follows a largely linear log-odds structure.
+<br>
+
+<details>
+<summary><b>Show Plot: Risk Distribution for SVM </b></summary>
+```{r, Risk Distribution for SVM, cache=TRUE}
+### ---------------------------------------------------------------
+### Risk Distribution Plot for Tuned SVM (Two Example Patients)
+### ---------------------------------------------------------------
+
+library(ggplot2)
+
+# -----------------------------------------------------------
+# Define Patient 1 (low-risk profile)
+# -----------------------------------------------------------
+patient1 <- data.frame(
+  AgeCategory        = "Age 70 to 74",
+  Sex                = "Male",
+  BMI                = 32,
+  SmokerStatus       = "Former smoker",
+  HadDiabetes        = "Yes",
+  PhysicalActivities = "No",
+  GeneralHealth      = "Fair",
+  SleepHours         = 6,
+  DifficultyWalking  = "Yes",
+  HadKidneyDisease   = "No",
+  CovidPos           = "No"
+)
+
+prob1 <- predict(svm_final, patient1, probability = TRUE)
+prob1 <- attr(prob1, "probabilities")[, "Yes"]
+
+
+# -----------------------------------------------------------
+# Define Patient 2 (high-risk profile)
+# -----------------------------------------------------------
+# Older, obese, current smoker, kidney disease, poor health
+patient2 <- data.frame(
+  AgeCategory        = "Age 70 to 74",
+  Sex                = "Male",
+  BMI                = 38,
+  SmokerStatus       = "Current smoker - now smokes every day",
+  HadDiabetes        = "Yes",
+  PhysicalActivities = "No",
+  GeneralHealth      = "Poor",
+  SleepHours         = 5,
+  DifficultyWalking  = "Yes",
+  HadKidneyDisease   = "Yes",
+  CovidPos           = "Yes"
+)
+
+prob2 <- predict(svm_final, patient2, probability = TRUE)
+prob2 <- attr(prob2, "probabilities")[, "Yes"]
+
+
+# -----------------------------------------------------------
+# Data for the histogram
+# -----------------------------------------------------------
+plot_df <- data.frame(Risk = svm_prob)
+
+# Legend text for both patients
+patient_legend <- paste0(
+  "Patient 1 (blue):\n",
+  "  M, 70–74, BMI 32\n",
+  "  Former smoker, Diabetes Yes\n",
+  "  Fair health, No kidney disease\n",
+  "  Sleep = 6h\n",
+  "  Risk = ", round(prob1, 3), "\n\n",
+  "Patient 2 (red):\n",
+  "  M, 70–74, BMI 38\n",
+  "  Smoker (daily), Diabetes Yes\n",
+  "  Poor health, Kidney disease Yes\n",
+  "  Sleep = 5h\n",
+  "  Risk = ", round(prob2, 3)
+)
+
+# -----------------------------------------------------------
+# Plot
+# -----------------------------------------------------------
+ggplot(plot_df, aes(x = Risk)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.6) +
+
+  # Vertical line for Patient 1 (blue)
+  geom_vline(xintercept = prob1, color = "blue", lwd = 1.4) +
+
+  # Vertical line for Patient 2 (red)
+  geom_vline(xintercept = prob2, color = "red", lwd = 1.4) +
+
+  # Title and annotation box
+  annotate("label",
+           x = max(plot_df$Risk)*0.75,
+           y = max(table(cut(plot_df$Risk, breaks = 40))) * 0.95,
+           label = patient_legend,
+           hjust = 0,
+           vjust = 1,
+           size = 3.3,
+           label.size = 0.3,
+           fill = "white",
+           alpha = 0.85) +
+
+  labs(
+    title = "Risk Distribution — SVM-Predicted Heart Attack Probability",
+    subtitle = "Blue = low-risk profile | Red = high-risk profile",
+    x = "Predicted probability of heart attack",
+    y = "Count of individuals"
+  ) +
+  theme_minimal(base_size = 13)
+```
+<br>
+
+The histogram shows the distribution of SVM-predicted heart attack probabilities across all individuals in the test dataset. Most predicted risks cluster at low values (below 0.25), reflecting the rarity of heart attacks even after undersampling. Two example patients are highlighted:
+**Patient 1** still falls within this low-risk bulk, indicating that the SVM treats such profiles as relatively common and not strongly risk-elevating on their own. 
+In contrast, **Patient 2**, who combines multiple severe conditions, is placed far on the right tail, illustrating how the model sharply escalates predicted risk only when several high-impact factors accumulate simultaneously.
+</details>
+<br>
+
+--------------------------------------------------------------------------------
 
 ### Neural Network 
 
@@ -511,6 +752,8 @@ par(mfrow = c(1,1))
 </details>
 <br>
 
+--------------------------------------------------------------------------------
+
 #### Linear Model 2: Predicting Sleep Hours
 
 We do not need to log-transform SleepHours because the variable is already approximately continuous, bounded, and reasonably symmetric, and the residual diagnostics show no strong skewness or heteroscedasticity that would require transformation.
@@ -763,6 +1006,7 @@ par(mfrow = c(1,1))
 ```
 </details>
 <br>
+--------------------------------------------------------------------------------
 
 ### Generalized Linear Model Poisson
 
