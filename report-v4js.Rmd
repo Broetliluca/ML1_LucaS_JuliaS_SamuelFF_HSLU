@@ -1,0 +1,1559 @@
+---
+title: "Early detection and risk stratification of heart disease"
+author: "Luca Signorini, Samuel Frei, Julia Studer"
+date: "15.11.2025"
+output:
+  html_document:
+    highlight: tango   # for line numbering to work
+---
+
+
+
+
+# Introduction
+
+Motivation, research question, context
+
+Use case: A regional hospital wants to improve its preventive care and identify patients with an increased risk of heart disease at an early stage.
+Until now, risk assessment has mainly been carried out by doctors on the basis of individual factors (age, BMI, blood pressure). However, the hospital wants to understand:
+Which factors have the greatest influence on the risk of heart disease
+How these factors reinforce or weaken each other
+Whether modern machine learning models provide better predictions than traditional statistics
+At what thresholds the risk increases significantly
+How patients can be given targeted preventive care
+To this end, the hospital has commissioned our project team to analyze the Person Health Indicator dataset.
+
+The overarching question of the project
+“How well can the risk of heart disease be predicted using personal health indicators, and which factors have the strongest influence?”
+We answer this question in two dimensions:
+I. Risk prediction (predictive task)
+Can a model reliably identify patients at increased risk?
+→ For this: GLM Binomial, SVM, Neural Network
+II. Risk explanation (interpretation task)
+Which factors drive the risk, and how do these effects unfold?
+→ For this: Linear Model, Poisson GLM, GAM 
+
+What the hospital ultimately receives
+A clear, clinically useful answer:
+Early warning model: Who is at risk?
+Top 5 main risk factors: What drives the risk?
+Threshold values: When does a factor become critical?
+Recommendations: Where is patient intervention worthwhile (exercise, BMI, sleep)?
+Model comparison: Which model is the most reliable?
+
+<br>
+--------------------------------------------------------------------------------
+
+<br>
+
+# 1. Data Preparation
+
+**Dataset:** heart_2022_no_nans.csv
+<br>
+**Source:** https://www.kaggle.com/datasets/kamilpytlak/personal-key-indicators-of-heart-disease?resource=download&select=2022 
+
+The chosen data set is an excerpt of the data collected in 2022 in the framework of the Behavioral Risk Factor Surveillance System (BRFSS) of the american Centers for Disease Control and Prevention (CDC). In this framework, people are called randomly with Random Digit Dialling techniques on landlines and cellphones and are asked to answer a questionnaire regarding their health-related risk behaviors and events, chronic health conditions and use of preventive services. The survey is conducted contituously through the year and adults 18 years and older are asked to participate. For each question there are some options to choose from like Yes/No; number of days 1-30; good, bad, fair. In some cases people are asked for numbers without suggestions, e.g. weight and height for the Body-Mass-Index (BMI) calculation. (Sources: https://www.cdc.gov/brfss/about/brfss_faq.htm, https://www.cdc.gov/brfss/questionnaires/pdf-ques/2022-BRFSS-Questionnaire-508.pdf) 
+
+After loading the data set, we reduce both the number of variables and observations to stay within the task limits. To address the class imbalance in the target variable HadHeartAttack (more “No” than “Yes”), we apply undersampling to the majority class, achieving a 1:4 ratio between “Yes” and “No” cases. After this we split the remaining Set in a Training and Testing Set of ratio 70:30.
+
+<br>
+<details>
+<summary><b>Show code: Prerequisites</b></summary>
+```{r prerequisites, cache=TRUE}
+# Prerequisites
+#install.packages("dplyr")
+library(dplyr)
+#install.packages("skimr")
+library(skimr)
+#install.packages("tidyverse")
+library(tidyverse)
+#install.packages("nnet")
+library(nnet)
+#install.packages("gamlss.add")
+library(gamlss.add)
+#install.packages("ggplot2")
+library(ggplot2)
+#install.library("caret")
+library(caret)
+
+```
+</details>
+
+<details>
+<summary><b>Show code: Data import and summary</b></summary>
+```{r loading-data, cache=TRUE}
+# Loading data
+#data <- read.csv("heart_2022_no_nans.csv")
+data <- read.csv(file = "C:\\Users\\stude\\Desktop\\MPM01\\2022\\heart_2022_no_nans.csv")
+
+skim(data)
+```
+
+```{r recode-outcome, cache=TRUE}
+# Ensure outcome is a proper binary factor
+data$HadHeartAttack <- factor(data$HadHeartAttack,
+                              levels = c("No", "Yes"))
+
+# Quick check
+str(data$HadHeartAttack)
+table(data$HadHeartAttack)
+```
+</details>
+
+<details>
+<summary><b>Show code: Convert-types</b></summary>
+```{r convert-types, cache=TRUE}
+data <- data %>%
+  mutate(
+    HadHeartAttack     = factor(HadHeartAttack, levels = c("No", "Yes")),
+    AgeCategory        = factor(AgeCategory),
+    Sex                = factor(Sex),
+    SmokerStatus       = factor(SmokerStatus),
+    HadDiabetes        = factor(HadDiabetes),
+    PhysicalActivities = factor(PhysicalActivities),
+    GeneralHealth      = factor(GeneralHealth),
+    DifficultyWalking  = factor(DifficultyWalking),
+    HadKidneyDisease   = factor(HadKidneyDisease),
+    CovidPos           = factor(CovidPos),
+    BMI                = as.numeric(BMI),
+    SleepHours         = as.numeric(SleepHours)
+  )
+
+str(data$AgeCategory)
+```
+</details>
+
+<details>
+<summary><b>Show code: Select predictors</b></summary>
+```{r select-predictors, cache=TRUE}
+# Keep only 11 selected predictors = 12 variables
+df <- data %>%
+  select(
+    HadHeartAttack,
+    AgeCategory,
+    Sex,
+    BMI,
+    SmokerStatus,
+    HadDiabetes,
+    PhysicalActivities,
+    GeneralHealth,
+    SleepHours,
+    DifficultyWalking,
+    HadKidneyDisease,
+    CovidPos
+  )
+
+```
+</details>
+
+<details>
+<summary><b>Show code: Handling class imbalance</b></summary>
+```{r handling-class-imbalance, cache=TRUE}
+
+set.seed(123)
+
+minority <- df %>% filter(HadHeartAttack == "Yes")
+majority <- df %>% filter(HadHeartAttack == "No")
+
+ratio <- 4  # majority : minority = 4 : 1
+
+majority_under <- majority %>% sample_n(nrow(minority) * ratio)
+
+df_balanced <- bind_rows(minority, majority_under)
+
+# Overwrite name so colleague's code still works:
+data <- df_balanced
+
+# Check new distribution
+table(data$HadHeartAttack)
+```
+</details>
+
+<details>
+<summary><b>Show code: Split Data in Test and Train Set</b></summary>
+```{r split, cache=TRUE}
+set.seed(123)
+library(caret)
+
+train_index <- createDataPartition(data$HadHeartAttack, p = 0.7, list = FALSE)
+
+train <- data[train_index, ]
+test  <- data[-train_index, ]
+
+
+```
+</details>
+--------------------------------------------------------------------------------
+
+<br>
+
+# 2. Data Visualization
+
+Here the visualization of our dataset is described.
+
+<br>
+
+--------------------------------------------------------------------------------
+
+<br>
+
+# 3. Methods 
+### Data Preparation
+**Handling Class Imbalance in the Target Variable**
+
+In the original dataset, the outcome variable HadHeartAttack is highly imbalanced, with only a small fraction of participants reporting a past heart attack. This imbalance poses a major challenge for predictive models: Without correction, most models learn to simply predict “No heart attack” for all cases. While this can still produce a high overall accuracy, such models fail exactly where the hospital needs them most — identifying patients at increased cardiovascular risk.
+
+Due to the large sample size of the provided dataset, we were required to use the undersampling method to achieve a 4:1 ratio of our target variable - 'HadHeartAttack' - as well as to meet the dataset size prerequisites. From an initial sample size of over 200'000, we reduced it to about 67'000, of which 53'740 did not have a heart attack and 13'435 did.
+
+
+
+
+## 3.1. Risk prediction: Can a model reliably identify patients at increased risk?
+
+### Generalized linear model Binomial
+
+Samuel
+
+```{r glm-binomial, cache=TRUE}
+glm_bin <- glm(
+  HadHeartAttack ~ AgeCategory + Sex + BMI + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    SleepHours + DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train,
+  family = binomial
+)
+
+summary(glm_bin)
+```
+
+```{r glm-roc, cache=TRUE}
+library(pROC)
+
+prob_glm <- predict(glm_bin, newdata = test, type = "response")
+
+roc_glm <- roc(test$HadHeartAttack, prob_glm)
+
+plot(roc_glm, main = "ROC Curve — GLM Binomial")
+auc(roc_glm)
+```
+
+```{r glm-bmi-curve, cache=TRUE}
+bmi_grid <- data.frame(
+  BMI                = seq(15, 50, length.out = 150),
+  AgeCategory        = levels(train$AgeCategory)[1],
+  Sex                = levels(train$Sex)[1],
+  SmokerStatus       = levels(train$SmokerStatus)[1],
+  HadDiabetes        = levels(train$HadDiabetes)[1],
+  PhysicalActivities = levels(train$PhysicalActivities)[1],
+  GeneralHealth      = levels(train$GeneralHealth)[1],
+  SleepHours         = 7,
+  DifficultyWalking  = levels(train$DifficultyWalking)[1],
+  HadKidneyDisease   = levels(train$HadKidneyDisease)[1],
+  CovidPos           = levels(train$CovidPos)[1]
+)
+
+bmi_grid$prob <- predict(glm_bin, newdata = bmi_grid, type = "response")
+
+plot(
+  bmi_grid$BMI, bmi_grid$prob, type = "l", lwd = 2,
+  xlab = "BMI", ylab = "Predicted probability",
+  main = "Predicted Heart Attack Risk vs BMI (GLM)"
+)
+```
+
+--------------------------------------------------------------------------------
+
+### Support Vector machines
+
+Support Vector Machines offer a powerful alternative to traditional statistical models by allowing nonlinear decision boundaries through kernel functions. In the context of heart disease risk prediction, nonlinearities are plausible: risk factors such as age, BMI, diabetes, or general health may interact in complex ways that are not fully captured by a linear model. An SVM with a radial basis function (RBF) kernel can automatically model such interactions without needing to specify them explicitly.
+
+Our goal in applying an SVM is therefore twofold:
+
+- Evaluate whether nonlinear patterns improve prediction accuracy relative to the GLM baseline.
+- Assess the model’s ability to assign individual risk probabilities, which can support clinical risk stratification.
+
+Because RBF SVMs scale poorly to large datasets (quadratic to cubic computational complexity), we train the model on a 10,000-row subsample and use cross-validated hyperparameter tuning to optimize its performance. This approach provides a computationally feasible way to test whether more flexible nonlinear models meaningfully improve risk prediction over interpretable linear models.
+<br>
+
+<details>
+<summary><b>Show code: SVM </b></summary>
+```{r, SVM radial kernel, cache=TRUE}
+### ---------------------------------------------------------------
+### Support Vector Machine (SVM) for Heart Attack Risk Prediction
+### Nonlinear radial kernel + hyperparameter tuning
+### ---------------------------------------------------------------
+
+library(e1071)
+library(caret)
+library(pROC)
+
+# Ensure correct factor level order
+train$HadHeartAttack <- factor(train$HadHeartAttack, levels = c("No", "Yes"))
+test$HadHeartAttack  <- factor(test$HadHeartAttack,  levels = c("No", "Yes"))
+
+
+### ---------------------------------------------------------------
+### 1. Subsample the training data for computational feasibility
+### ---------------------------------------------------------------
+# Nonlinear SVMs scale poorly (O(n²–n³)), so we reduce to 10,000 rows.
+
+set.seed(123)
+sub_index <- sample(seq_len(nrow(train)), 10000)
+train_sub <- train[sub_index, ]
+
+
+### ---------------------------------------------------------------
+### 2. Hyperparameter tuning using caret (grid search)
+### ---------------------------------------------------------------
+# Why tune?
+#   - SVM performance depends heavily on C (cost) and gamma.
+#   - Default settings often perform poorly.
+#   - Grid search systematically evaluates combinations to find the best.
+
+tune_grid <- expand.grid(
+  sigma = c(0.01, 0.05, 0.1),   # controls nonlinearity ("gamma")
+  C     = c(0.5, 1, 2)          # margin penalty
+)
+
+ctrl <- trainControl(
+  method = "cv",
+  number = 3,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary   # ensures ROC is used
+)
+
+set.seed(123)
+svm_tuned <- train(
+  HadHeartAttack ~ AgeCategory + Sex + BMI + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    SleepHours + DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train_sub,
+  method = "svmRadial",
+  tuneGrid = tune_grid,
+  metric = "ROC",     # optimization target
+  trControl = ctrl
+)
+
+svm_tuned
+# caret automatically selects the sigma and C combination with highest AUC
+
+
+### ---------------------------------------------------------------
+### 3. Train final SVM using best hyperparameters
+### ---------------------------------------------------------------
+best_sigma <- svm_tuned$bestTune$sigma
+best_C     <- svm_tuned$bestTune$C
+
+svm_final <- svm(
+  HadHeartAttack ~ AgeCategory + Sex + BMI + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    SleepHours + DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train_sub,
+  kernel = "radial",
+  gamma = best_sigma,
+  cost  = best_C,
+  probability = TRUE
+)
+
+
+### ---------------------------------------------------------------
+### 4. Predict risk probabilities on the test set
+### ---------------------------------------------------------------
+svm_pred <- predict(svm_final, newdata = test, probability = TRUE)
+svm_prob <- attr(svm_pred, "probabilities")[, "Yes"]
+
+
+### ---------------------------------------------------------------
+### 5. ROC curve and AUC
+### ---------------------------------------------------------------
+roc_svm <- roc(test$HadHeartAttack, svm_prob)
+```
+</details>
+<br>
+
+<details>
+<summary><b>Show Plot: SVM </b></summary>
+```{r, plot SVM, cache=TRUE}
+plot(
+  roc_svm,
+  col = "darkblue",
+  lwd = 2,
+  main = "ROC Curve — Tuned SVM (Radial Kernel, 10k Subsample)"
+)
+
+auc(roc_svm)
+```
+</details>
+<br>
+
+A radial SVM was trained on a 10,000-row subsample and optimized via 3-fold cross-validated grid search over C ∈ {0.5,1,2} and sigma ∈ {0.01,0.05,0.10}. The best-performing model used sigma = 0.01 and C = 0.5, achieving an AUC of 0.7987 on the test set. Although tuning improved performance relative to default settings, the SVM remained clearly below the GLM (AUC = 0.825). Sensitivity was very high (≈0.97), but specificity was low (≈0.18), indicating that the SVM tends to overpredict risk. Overall, nonlinear decision boundaries did not provide predictive advantages for this dataset, suggesting that heart attack risk follows a largely linear log-odds structure.
+<br>
+
+<details>
+<summary><b>Show Plot: Risk Distribution for SVM </b></summary>
+```{r, Risk Distribution for SVM, cache=TRUE}
+### ---------------------------------------------------------------
+### Risk Distribution Plot for Tuned SVM (Two Example Patients)
+### ---------------------------------------------------------------
+
+library(ggplot2)
+
+# -----------------------------------------------------------
+# Define Patient 1 (low-risk profile)
+# -----------------------------------------------------------
+patient1 <- data.frame(
+  AgeCategory        = "Age 70 to 74",
+  Sex                = "Male",
+  BMI                = 32,
+  SmokerStatus       = "Former smoker",
+  HadDiabetes        = "Yes",
+  PhysicalActivities = "No",
+  GeneralHealth      = "Fair",
+  SleepHours         = 6,
+  DifficultyWalking  = "Yes",
+  HadKidneyDisease   = "No",
+  CovidPos           = "No"
+)
+
+prob1 <- predict(svm_final, patient1, probability = TRUE)
+prob1 <- attr(prob1, "probabilities")[, "Yes"]
+
+
+# -----------------------------------------------------------
+# Define Patient 2 (high-risk profile)
+# -----------------------------------------------------------
+# Older, obese, current smoker, kidney disease, poor health
+patient2 <- data.frame(
+  AgeCategory        = "Age 70 to 74",
+  Sex                = "Male",
+  BMI                = 38,
+  SmokerStatus       = "Current smoker - now smokes every day",
+  HadDiabetes        = "Yes",
+  PhysicalActivities = "No",
+  GeneralHealth      = "Poor",
+  SleepHours         = 5,
+  DifficultyWalking  = "Yes",
+  HadKidneyDisease   = "Yes",
+  CovidPos           = "Yes"
+)
+
+prob2 <- predict(svm_final, patient2, probability = TRUE)
+prob2 <- attr(prob2, "probabilities")[, "Yes"]
+
+
+# -----------------------------------------------------------
+# Data for the histogram
+# -----------------------------------------------------------
+plot_df <- data.frame(Risk = svm_prob)
+
+# Legend text for both patients
+patient_legend <- paste0(
+  "Patient 1 (blue):\n",
+  "  M, 70–74, BMI 32\n",
+  "  Former smoker, Diabetes Yes\n",
+  "  Fair health, No kidney disease\n",
+  "  Sleep = 6h\n",
+  "  Risk = ", round(prob1, 3), "\n\n",
+  "Patient 2 (red):\n",
+  "  M, 70–74, BMI 38\n",
+  "  Smoker (daily), Diabetes Yes\n",
+  "  Poor health, Kidney disease Yes\n",
+  "  Sleep = 5h\n",
+  "  Risk = ", round(prob2, 3)
+)
+
+# -----------------------------------------------------------
+# Plot
+# -----------------------------------------------------------
+ggplot(plot_df, aes(x = Risk)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.6) +
+
+  # Vertical line for Patient 1 (blue)
+  geom_vline(xintercept = prob1, color = "blue", lwd = 1.4) +
+
+  # Vertical line for Patient 2 (red)
+  geom_vline(xintercept = prob2, color = "red", lwd = 1.4) +
+
+  # Title and annotation box
+  annotate("label",
+           x = max(plot_df$Risk)*0.75,
+           y = max(table(cut(plot_df$Risk, breaks = 40))) * 0.95,
+           label = patient_legend,
+           hjust = 0,
+           vjust = 1,
+           size = 3.3,
+           label.size = 0.3,
+           fill = "white",
+           alpha = 0.85) +
+
+  labs(
+    title = "Risk Distribution — SVM-Predicted Heart Attack Probability",
+    subtitle = "Blue = low-risk profile | Red = high-risk profile",
+    x = "Predicted probability of heart attack",
+    y = "Count of individuals"
+  ) +
+  theme_minimal(base_size = 13)
+```
+<br>
+
+The histogram shows the distribution of SVM-predicted heart attack probabilities across all individuals in the test dataset. Most predicted risks cluster at low values (below 0.25), reflecting the rarity of heart attacks even after undersampling. Two example patients are highlighted:
+**Patient 1** still falls within this low-risk bulk, indicating that the SVM treats such profiles as relatively common and not strongly risk-elevating on their own. 
+In contrast, **Patient 2**, who combines multiple severe conditions, is placed far on the right tail, illustrating how the model sharply escalates predicted risk only when several high-impact factors accumulate simultaneously.
+</details>
+<br>
+
+--------------------------------------------------------------------------------
+
+### Neural Network 
+
+For the first model the same parameters as in the German Credit example was used. 
+
+```{r, Neural Network model, cache=TRUE}
+#the train proportion of the data defined above is used to train the model
+
+set.seed(412)
+HeartAttack_net <- nnet(HadHeartAttack ~ ., data = train, size=(16), maxit=10000, range=0.1, decay=5e-4, MaxNWts = 2000)
+```
+
+```{r, show the network}
+#plot(HeartAttack_net)
+```
+
+```{r,}
+HeartAttack_net
+```
+We are mostly interested in correctly predicting the heart attack cases correctly. It could be fatal if a patient is labeled no risk for heart attack that actually has a high risk. On the other hand it is not so tragic if a person with moderate risk is labelled as high risk, this could motivate a healthier lifestyle. 
+
+####Make predictions
+
+```{r} 
+pred <- predict(HeartAttack_net, test, type="class")
+```
+
+```{r} 
+confusionMatrix(as.factor(pred), as.factor(test$HadHeartAttack))
+```
+The model is very good at identifying the "No heart attack" cases with sensitivity value of 0.944. At the same time the model misses 68% of heart attack cases, wit a specificity value of 0.321. This is not enough for a risk prediction in medical modeling. This is also represented in the ROC curve shown below.     
+
+#### ROC Curves
+
+The Receiver Operating Characteristic is a useful tool to indicate model quality. For this we plot sensitivity against 1-specificity
+
+```{r,ROC curves}
+library(ROCR)
+```
+```{r}
+pred_raw <- predict(HeartAttack_net, test, decision.values=TRUE, type = "raw")
+pred <- ROCR::prediction(pred_raw, test$HadHeartAttack)
+perf <- ROCR::performance(pred, "tpr", "fpr")
+plot(perf, lwd=2, col="blue")
+abline(a=0, b=1)
+```
+
+
+The main reasons for this are the following: first we have a high class imbalance (80/20), even tough undersampling was applied to the original data. Also the default classification threshold is 0.5, which is not appropriate in this case. The model as it is optimised for accuracy, which gives more weight to the correct prediction of the most cases of no heart attack. 
+
+#### Optimised neural network model
+
+To correct for these factors, the following parameters were changed
+1. Scale predictors 
+The scaling of the predictors should improve the prediction of the HadHeartAttack Yes case. Also it keeps the neural network weights stable and the threshold tuning reliable.`
+
+2. Rebalance the training data 
+Since there are still mostly "HadHeartAttack No" cases used for training, the "HadHeartAttack Yes" cases are upsampled.
+
+3. Optimizing the parameters of the model
+There are imbalanced classes and missing a heart attack is worse than a false alarm and therefore accuracy is misleading. The ROC AUC is optimized and probabilities used. The main parameters to be optimized are the size and decay. 
+
+```{r}
+
+# Define cross-validation strategy
+#ctrl <- trainControl(
+  #method = "repeatedcv",
+  #number = 5,
+  #repeats = 3,
+  #sampling = "up",          # handle imbalance inside CV
+  #classProbs = TRUE,        # needed for ROC
+  #summaryFunction = twoClassSummary,
+  #savePredictions = "final"
+#)
+
+# Define the tuning grid 
+#grid <- expand.grid(
+  #size = c(4, 8, 12),
+  #decay = c(1e-4, 5e-4, 1e-3, 5e-3)
+#)
+
+# Train and tune the model
+
+#set.seed(412)
+
+#nnet_caret <- train(
+  #HadHeartAttack ~ .,
+  #data = train,
+  #method = "nnet",
+  #metric = "ROC",          # optimize AUC
+  #tuneGrid = grid,
+  #trControl = ctrl,
+  #preProcess = c("center", "scale"),
+  #trace = FALSE,
+  #maxit = 1000
+#)
+```
+
+```{r, show the network, optimized}
+#plot(HeartAttack_v2_net)
+```
+
+```{r}
+# Inspect optimal parameters
+nnet_caret
+
+nnet_caret$bestTune
+```
+```{r}
+# Train the model with the optimized parameters
+set.seed(412)
+HeartAttack_v2_net <- nnet(HadHeartAttack ~ ., data = train, size=(4), maxit=10000, range=0.1, decay=1e-4, MaxNWts = 2000)
+```
+
+#### 
+Make predictions
+
+```{r} 
+pred_v2 <- predict(HeartAttack_v2_net, test, type="raw")
+```
+
+```{r,ROC curves, optimized}
+library(ROCR)
+```
+```{r}
+pred_raw <- predict(HeartAttack_net, test, decision.values=TRUE, type = "raw")
+pred <- ROCR::prediction(pred_raw, test$HadHeartAttack)
+perf <- ROCR::performance(pred, "tpr", "fpr")
+plot(perf, lwd=2, col="blue")
+abline(a=0, b=1)
+```
+
+```{r, Area under curve ROC optimized}  
+
+
+```
+
+```{r}
+pred_class <- ifelse(pred_v2 > 0.2, "Yes", "No")
+pred_class <- factor(pred_class, levels = c("No", "Yes"))
+``` 
+
+
+```{r} 
+confusionMatrix(
+  pred_class,
+  test$HadHeartAttack,
+  positive = "Yes"
+)
+```
+
+```{r}    
+library(pROC)
+roc_obj <- roc(test$HadHeartAttack, pred_v2)
+coords(roc_obj, x = c(0.05, 0.1, 0.15, 0.20, 0.25, 0.30),
+       input = "threshold",
+       ret = c("sensitivity", "specificity"))
+``` 
+Looking at the results of using different thresholds, there is a trade off between high sensitivity (correct detection of HadHeartAttack Yes) and specificity (correct dismissing of HadHeartAttack No). A good compromise of detecting the risk of a heart attack and not have too many false alarms, is a threshold of 0.2 or 0.15. Looking at the balanced accuracy, the maximum is at a threshold of 0.2, balancing best the two errror types. Like this, the correct predicted HadHeartAttack are 79 %, and the correct dismiss of HadHeartAttack Yes is still at 71 %. Also a threshold of 0.15 could be applied if the false positives are considered as acceptable. 
+
+## 3.2. Risk explanation: Which factors drive the risk, and how do these effects unfold?
+
+### Exploratory Linear Models Among Predictors
+
+To better understand how the health indicators relate to one another — independently of the heart attack outcome — we fitted simple linear models using BMI and SleepHours as continuous response variables. These exploratory models help reveal clusters of risk factors and provide context for the effects observed in the GLM and GAM models.
+<br>
+
+#### Linear Model 1: Predicting BMI
+
+We did not log-transform the BMI do it is a continous variable because it is strictly positive, just slightly right-skewed and most importantly the interpretation of the Model-Output remains intuitiv.
+<br>
+
+<details>
+<summary><b>Show code: linear model predicting BMI</b></summary>
+```{r lm_bim, cache=TRUE}
+### ======================================================
+### ORDER FACTORS IN A LOGICAL WAY
+### ======================================================
+
+# Age (chronological)
+train$AgeCategory <- factor(train$AgeCategory, levels = c(
+  "Age 18 to 24",
+  "Age 25 to 29",
+  "Age 30 to 34",
+  "Age 35 to 39",
+  "Age 40 to 44",
+  "Age 45 to 49",
+  "Age 50 to 54",
+  "Age 55 to 59",
+  "Age 60 to 64",
+  "Age 65 to 69",
+  "Age 70 to 74",
+  "Age 75 to 79",
+  "Age 80 or older"
+))
+
+# Ordered health categories
+train$GeneralHealth <- factor(train$GeneralHealth,
+                              levels = c("Excellent", "Very good", "Good", "Fair", "Poor"))
+
+# Physical activity (nominal)
+train$PhysicalActivities <- factor(train$PhysicalActivities,
+                                   levels = c("Yes", "No"))
+
+# Smoking (nominal)
+train$SmokerStatus <- factor(train$SmokerStatus,
+                             levels = c("Never smoked",
+                                        "Former smoker",
+                                        "Current smoker - now smokes some days",
+                                        "Current smoker - now smokes every day"))
+
+# Sex
+train$Sex <- factor(train$Sex, levels = c("Female", "Male"))
+
+
+### ======================================================
+### FIT THE MODEL WITH HEALTHY BASELINE
+### ======================================================
+
+lm_bmi_healthy <- lm(
+  BMI ~ AgeCategory + Sex + PhysicalActivities + SleepHours +
+        GeneralHealth + SmokerStatus,
+  data = train
+)
+
+summary(lm_bmi_healthy)
+```
+</details>
+<br>
+
+Using a healthy reference profile (young, female, active, excellent health, never smoked), the model reveals clear associations with BMI. BMI rises steadily across adulthood and peaks around ages 45–55, consistent with epidemiological patterns, before declining in the oldest age groups. Physical inactivity is associated with a substantial BMI increase of 1.7 units. Worse self-rated general health shows a strong monotonic association with higher BMI, with individuals reporting “Fair” or “Poor” health exhibiting more than 4 BMI units above the healthy baseline. Current smokers have significantly lower BMI than never-smokers, a known effect of nicotine. Although the model explains around 11% of BMI variation—typical for behavioral health data—it provides meaningful insight into how lifestyle and health characteristics cluster in ways relevant for cardiovascular risk.
+
+<details>
+<summary><b>Show detailed interpretation: linear model predicting BMI</b></summary>
+<br>
+**This linear model estimates how demographic, lifestyle, and health variables are associated with BMI, using a healthy individual as the reference category:**
+
+- Age 18–24
+- Female
+- Physically active (PhysicalActivities = Yes)
+- Excellent general health
+- Never smoked
+
+The intercept (23.84) is therefore the estimated BMI for this baseline individual.
+
+<br>
+**1. Age effects:** *BMI increases steadily with age until ~55–59, then declines in very old age*
+
+Relative to the 18–24 baseline:
+
+- Ages 25–29: +2.00 BMI
+- Ages 40–44: +3.77 BMI
+- Ages 45–49: +4.05 BMI
+- Ages 50–54: +3.98 BMI
+- Ages 55–59: +3.39 BMI
+
+These are all highly significant (p < 2e-16).
+
+This pattern reflects a typical adult BMI trajectory:
+BMI rises through early and middle adulthood, stabilizes, then decreases at the oldest ages.
+
+Age 80+ shows –0.47 BMI (p = 0.0049) versus young adults → older adults often experience muscle loss and weight reduction.
+
+<br>
+**2. Sex:** *Males have slightly higher BMI*
+
+SexMale = +0.27 BMI units (p ≈ 2.6e-06)
+
+This indicates a modest but significant difference, consistent with population norms.
+
+<br>
+**3. Physical activity:** *Inactive individuals have substantially higher BMI*
+
+PhysicalActivitiesNo = +1.74 BMI (p < 2e-16)
+
+Inactive people weigh almost 2 BMI units more, on average, than active people.
+This is one of the strongest modifiable effects in the model.
+
+<br>
+**4. Sleep:** *Small negative effect*
+
+SleepHours = –0.053 BMI units per hour (p = 0.0056)
+
+Each additional hour of sleep is associated with a very small decrease in BMI.
+Statistically significant but clinically minor.
+
+<br>
+**5. GeneralHealth:** *Strong monotonic gradient*
+
+Compared with Excellent health, BMI increases as general health worsens:
+
+- Very good: +1.64
+- Good: +3.61
+- Fair: +4.59
+- Poor: +4.15
+- All p < 2e-16.
+
+This is a very clear and expected pattern:
+
+Worse self-rated health → higher BMI.
+
+These are among the largest effects in the model.
+
+<br>
+**6. SmokerStatus:** *Smoking groups have lower BMI than never-smokers*
+
+Relative to the healthy baseline Never smoked:
+
+- Current smoker (every day): –1.99 BMI (p < 2e-16)
+- Current smoker (some days): –1.67 BMI (p < 2e-16)
+- Former smoker: –0.018 (ns, p = 0.78)
+
+This reproduces a well-established pattern:
+
+Nicotine suppresses appetite, so current smokers tend to have lower BMI.
+
+Former smokers resemble never-smokers, as weight is typically regained after quitting.
+
+The strong negative coefficients confirm the reference level is now “Never smoked.”
+
+<br>
+**7. Model fit**
+
+R² = 0.111 → 11.1% of BMI variance explained
+This is typical for real-world lifestyle/health data, where BMI is influenced by many unmeasured factors (diet, genetics, socioeconomic conditions).
+
+Residual SD ≈ 6.14 indicates substantial individual variability around predicted BMI.
+
+F-test p < 2e-16 confirms the model as a whole is statistically meaningful.
+</details>
+<br>
+
+<details>
+<summary><b>Show plott: Linear Model BMI</b></summary>
+```{r Plot lm BMI, fig.height=14, fig.width=8, cache=TRUE}
+# Helper function
+predict_by_factor <- function(lm_model, variable, baseline_list) {
+  
+  lvls <- levels(train[[variable]])
+  
+  newdata <- as.data.frame(baseline_list)
+  newdata <- newdata[rep(1, length(lvls)), ]
+  newdata[[variable]] <- lvls
+  
+  pred <- predict(lm_model, newdata = newdata, se.fit = TRUE)
+  
+  data.frame(
+    Level = lvls,
+    Fit   = pred$fit,
+    Lower = pred$fit - 1.96 * pred$se.fit,
+    Upper = pred$fit + 1.96 * pred$se.fit
+  )
+}
+
+# Healthy baseline for BMI model
+baseline_bmi <- list(
+  AgeCategory        = "Age 18 to 24",
+  Sex                = "Female",
+  PhysicalActivities = "Yes",
+  SleepHours         = mean(train$SleepHours, na.rm = TRUE),
+  GeneralHealth      = "Excellent",
+  SmokerStatus       = "Never smoked"
+)
+
+# Generate prediction tables
+df_age  <- predict_by_factor(lm_bmi_healthy, "AgeCategory", baseline_bmi)
+df_pa   <- predict_by_factor(lm_bmi_healthy, "PhysicalActivities", baseline_bmi)
+df_gh   <- predict_by_factor(lm_bmi_healthy, "GeneralHealth", baseline_bmi)
+df_smok <- predict_by_factor(lm_bmi_healthy, "SmokerStatus", baseline_bmi)
+
+# Common y-axis across all panels
+ymin_bmi <- min(df_age$Lower, df_pa$Lower, df_gh$Lower, df_smok$Lower)
+ymax_bmi <- max(df_age$Upper, df_pa$Upper, df_gh$Upper, df_smok$Upper)
+
+# Plot function (ordinal vs nominal)
+plot_bmi_panel <- function(df, title, type = c("ordinal", "nominal")) {
+  
+  type <- match.arg(type)
+  n <- nrow(df)
+  xs <- seq(1, n)
+  
+  plot(xs, df$Fit, type="n",
+       ylim = c(ymin_bmi, ymax_bmi),
+       xlab = "", ylab = "Predicted BMI",
+       main = title,
+       xaxt = "n")
+  
+  # Grid
+  grid(col="lightgray", lty=3, lwd=0.6)
+  
+  # Line ONLY for ordinal
+  if (type == "ordinal") {
+    lines(xs, df$Fit, lwd=2, col="blue")
+  }
+  
+  # Points for all
+  points(xs, df$Fit, pch=19, col="blue")
+  
+  # CI
+  arrows(xs, df$Lower, xs, df$Upper, angle=90, code=3, length=0.05)
+  
+  axis(1, at = xs, labels = df$Level, las=2, cex.axis=0.8)
+}
+
+# Final 4 Plots
+par(mfrow = c(4,1), mar = c(6,6,3,2))
+
+plot_bmi_panel(df_age,  "Predicted BMI by Age Category",       "ordinal")
+plot_bmi_panel(df_pa,   "Predicted BMI by Physical Activity",  "nominal")
+plot_bmi_panel(df_gh,   "Predicted BMI by General Health",     "ordinal")
+plot_bmi_panel(df_smok, "Predicted BMI by Smoking Status",     "nominal")
+
+par(mfrow = c(1,1))
+```
+</details>
+<br>
+
+--------------------------------------------------------------------------------
+
+#### Linear Model 2: Predicting Sleep Hours
+
+We do not need to log-transform SleepHours because the variable is already approximately continuous, bounded, and reasonably symmetric, and the residual diagnostics show no strong skewness or heteroscedasticity that would require transformation.
+<br>
+
+<details>
+<summary><b>Show code: Linear Model Sleep Hours</b></summary>
+```{r lm SleepHours, fig.height=14, fig.width=8, cache=TRUE}
+### ======================================================
+### 1. Relevel categorical predictors (logical order)
+### ======================================================
+
+# AgeCategory chronological
+train$AgeCategory <- factor(train$AgeCategory, levels = c(
+  "Age 18 to 24",
+  "Age 25 to 29",
+  "Age 30 to 34",
+  "Age 35 to 39",
+  "Age 40 to 44",
+  "Age 45 to 49",
+  "Age 50 to 54",
+  "Age 55 to 59",
+  "Age 60 to 64",
+  "Age 65 to 69",
+  "Age 70 to 74",
+  "Age 75 to 79",
+  "Age 80 or older"
+))
+
+# Physical activity logical
+train$PhysicalActivities <- factor(train$PhysicalActivities,
+                                   levels = c("Yes", "No"))
+
+# General health ordered
+train$GeneralHealth <- factor(train$GeneralHealth,
+                              levels = c("Excellent",
+                                         "Very good",
+                                         "Good",
+                                         "Fair",
+                                         "Poor"))
+
+# Smoking habits logical order
+train$SmokerStatus <- factor(train$SmokerStatus,
+                             levels = c("Never smoked",
+                                        "Former smoker",
+                                        "Current smoker - now smokes some days",
+                                        "Current smoker - now smokes every day"))
+
+# Sex baseline
+train$Sex <- factor(train$Sex, levels = c("Female", "Male"))
+
+
+### ======================================================
+### 2. Fit LM model predicting SleepHours
+### ======================================================
+
+lm_sleep_healthy <- lm(
+  SleepHours ~ AgeCategory + Sex + PhysicalActivities +
+               GeneralHealth + DifficultyWalking + SmokerStatus,
+  data = train
+)
+
+summary(lm_sleep_healthy)
+```
+</details>
+<br>
+
+Sleep duration varies systematically across age groups: adults aged 25–54 sleep about 0.1–0.25 hours less than those aged 18–24, whereas older adults sleep increasingly more, reaching +0.61 hours in those 80+. General health is strongly associated with sleep, with individuals in Poor health sleeping 0.49 hours less than those in Excellent health. Difficulty walking and current smoking show modest reductions of 0.12 hours and 0.10–0.14 hours, respectively, while sex and physical activity have no meaningful effects. Although the model’s explanatory power is limited, the observed associations provide clear patterns that align with the nonlinear effects later captured in the GAM.
+<br>
+
+<details>
+<summary><b>Show detaild interpretation: Linear Model Sleep Hours</b></summary>
+**This linear model estimates how demographic, lifestyle, mobility, and health characteristics are associated with nightly sleep duration. The reference individual — represented by the model intercept — is**
+
+- Age 18–24
+- Female
+- Physically active (Yes)
+- Excellent general health
+- No difficulty walking
+- Never smoked
+
+Thus, the intercept of 7.15 hours represents the expected nightly sleep duration for a healthy young female, active, without mobility issues, and a non-smoker.
+
+The coefficients represent additive deviations from this baseline.
+
+**1. Age effects:** *Sleep decreases in early/mid-adulthood, then increases in older age*
+
+Relative to the 18–24 baseline:
+
+- Ages 25–54: sleep is 0.08–0.25 hours shorter, all statistically significant except 55–64.
+- Ages 55–64: near zero difference (not significant).
+- Ages 65–69: +0.24 hours (p < 1e-9)
+- Ages 70–74: +0.35 hours
+- Ages 75–79: +0.43 hours
+- Age 80+: +0.61 hours, highly significant.
+
+Pattern:
+Sleep declines from young adulthood through midlife, then increases steadily beginning around retirement age.
+This inverted U-shape is consistent with epidemiological evidence: midlife has the shortest sleep duration, older adults often sleep longer (though not always of higher quality).
+
+**2. Sex:** *No meaningful difference*
+
+SexMale = –0.011 hours, p = 0.43
+
+This effect is tiny and not statistically significant.
+→ There is no meaningful difference in sleep duration between males and females when adjusting for all other predictors.
+
+**3. Physical Activity:** *Not significant*
+
+PhysicalActivitiesNo = +0.028, p = 0.10
+
+Inactive individuals sleep ~0.03 hours more, but the effect is very small and not statistically significant.
+→ Physical activity does not meaningfully predict sleep duration in this dataset.
+
+**4. General Health:** *Strong and monotonic association*
+
+Compared with Excellent health, sleep duration decreases progressively with worsening health:
+
+GeneralHealth level	Effect on SleepHours
+Very good	–0.162 h
+Good	–0.229 h
+Fair	–0.351 h
+Poor	–0.487 h
+
+All effects are highly significant (p < 1e-13).
+
+Interpretation:
+Worse self-rated health is associated with materially shorter sleep.
+Individuals reporting Poor health sleep nearly half an hour less per night than those in Excellent health.
+
+This is one of the strongest predictors in the model.
+
+**5. Difficulty Walking:** *Small but significant decrease*
+
+DifficultyWalkingYes = –0.118 hours, p < 1e-7
+
+People who report difficulty walking sleep about 7 minutes less per night on average.
+This is statistically significant but clinically modest.
+
+**6. Smoking:** *Sleep decreases among current smokers*
+
+Relative to never-smokers:
+
+- Former smokers: +0.026 h (ns)
+- Current smokers (some days): –0.096 h, p = 0.01
+- Current smokers (daily): –0.140 h, p < 1e-7
+
+Interpretation:
+Current smokers sleep 6–8 minutes less per night.
+Former smokers sleep similarly to never-smokers.
+
+This aligns with literature linking nicotine use to reduced sleep duration and poorer sleep quality.
+
+**7. Model fit:**
+
+Residual SD = 1.48 hours
+→ Substantial unexplained variation, expected for behavioral outcomes like sleep.
+
+R² = 0.037 (3.7%)
+→ The model explains only a small portion of the variance.
+
+F-test p < 2e-16
+→ The model as a whole is statistically significant.
+
+Interpretation:
+Sleep duration is influenced by many unmeasured factors (stress, work hours, children, socioeconomic conditions, sleep disorders).
+Even though R² is low, the direction and significance of effects provide meaningful insights into how sleep correlates with lifestyle and health indicators.
+</details>
+<br>
+
+<br>
+<details>
+<summary><b>Show plot: Linear Model Sleep Hours</b></summary>
+```{r Plot lm SleepHours, fig.height=14, fig.width=8, cache=TRUE}
+### --- Helper to predict SleepHours for each level of a factor ---
+predict_by_factor <- function(lm_model, variable, baseline_list) {
+  
+  lvls <- levels(train[[variable]])
+  
+  newdata <- as.data.frame(baseline_list)
+  newdata <- newdata[rep(1, length(lvls)), ]
+  newdata[[variable]] <- lvls
+  
+  pred <- predict(lm_model, newdata = newdata, se.fit = TRUE)
+  
+  data.frame(
+    Level = lvls,
+    Fit   = pred$fit,
+    Lower = pred$fit - 1.96 * pred$se.fit,
+    Upper = pred$fit + 1.96 * pred$se.fit
+  )
+}
+
+# Healthy baseline for SleepHours model
+baseline_sleep <- list(
+  AgeCategory        = "Age 18 to 24",
+  Sex                = "Female",
+  PhysicalActivities = "Yes",
+  GeneralHealth      = "Excellent",
+  DifficultyWalking  = "No",
+  SmokerStatus       = "Never smoked"
+)
+
+# Generate prediction tables
+df_age_s   <- predict_by_factor(lm_sleep_healthy, "AgeCategory", baseline_sleep)
+df_pa_s    <- predict_by_factor(lm_sleep_healthy, "PhysicalActivities", baseline_sleep)
+df_gh_s    <- predict_by_factor(lm_sleep_healthy, "GeneralHealth", baseline_sleep)
+df_smok_s  <- predict_by_factor(lm_sleep_healthy, "SmokerStatus", baseline_sleep)
+
+# Common y-axis across all panels
+y_min_s <- min(df_age_s$Lower, df_pa_s$Lower, df_gh_s$Lower, df_smok_s$Lower)
+y_max_s <- max(df_age_s$Upper, df_pa_s$Upper, df_gh_s$Upper, df_smok_s$Upper)
+
+# Plotting function (ordinal ↔ nominal logic built in)
+plot_sleep_panel <- function(df, title, variable_type = c("ordinal","nominal")) {
+  
+  variable_type <- match.arg(variable_type)
+  n <- nrow(df)
+  xs <- seq(1, n)
+  
+  plot(xs, df$Fit, type="n",
+       ylim = c(y_min_s, y_max_s),
+       xlab = "", ylab = "Predicted Sleep Hours",
+       main = title,
+       xaxt = "n")
+  
+  grid(col="lightgray", lty=3, lwd=0.6)
+  
+  # Ordinal → draw a line
+  if (variable_type == "ordinal") {
+    lines(xs, df$Fit, lwd=2, col="blue")
+  }
+  
+  # Points for all
+  points(xs, df$Fit, pch=19, col="blue")
+  arrows(xs, df$Lower, xs, df$Upper, angle=90, code=3, length=0.05)
+  
+  axis(1, at = xs, labels = df$Level, las=2, cex.axis=0.9)
+}
+
+# Final 4 stacked plots
+par(mfrow = c(4,1), mar = c(6,6,3,2))
+
+plot_sleep_panel(df_age_s,  "Predicted Sleep Hours by Age Category",      "ordinal")
+plot_sleep_panel(df_pa_s,   "Predicted Sleep Hours by Physical Activity", "nominal")
+plot_sleep_panel(df_gh_s,   "Predicted Sleep Hours by General Health",    "ordinal")
+plot_sleep_panel(df_smok_s, "Predicted Sleep Hours by Smoking Status",    "nominal")
+
+par(mfrow = c(1,1))
+```
+</details>
+<br>
+--------------------------------------------------------------------------------
+
+### Generalized Linear Model Poisson
+
+Here, the factor of the sleeping hours is investigated more in detail. For this, the effect of the age category, sex, physical activity smoker status and general health on the sleeping hours is examined.
+The variable SleepHours is rather a measured duration of time reported in whole hours and not a cout of events, so it is not a count variable in a strict definition. Nevertheless it is reported as a count-like outcome with non-negative integers and is here treated as a count variable.
+``` {r gam-poisson, cache=FALSE}
+
+### ======================================================
+### 1. Relevel categorical predictors (logical order)
+### ======================================================
+
+# AgeCategory chronological
+train$AgeCategory <- factor(train$AgeCategory, levels = c(
+  "Age 18 to 24",
+  "Age 25 to 29",
+  "Age 30 to 34",
+  "Age 35 to 39",
+  "Age 40 to 44",
+  "Age 45 to 49",
+  "Age 50 to 54",
+  "Age 55 to 59",
+  "Age 60 to 64",
+  "Age 65 to 69",
+  "Age 70 to 74",
+  "Age 75 to 79",
+  "Age 80 or older"
+))
+
+# Physical activity logical
+train$PhysicalActivities <- factor(train$PhysicalActivities,
+                                   levels = c("Yes", "No"))
+
+# General health ordered
+train$GeneralHealth <- factor(train$GeneralHealth,
+                              levels = c("Excellent",
+                                         "Very good",
+                                         "Good",
+                                         "Fair",
+                                         "Poor"))
+
+# Smoking habits logical order
+train$SmokerStatus <- factor(train$SmokerStatus,
+                             levels = c("Never smoked",
+                                        "Former smoker",
+                                        "Current smoker - now smokes some days",
+                                        "Current smoker - now smokes every day"))
+
+# Sex baseline
+train$Sex <- factor(train$Sex, levels = c("Female", "Male"))
+
+
+str(data)
+data.sleep <- data |> 
+  mutate(
+    AgeCategory = factor(AgeCategory, ordered = TRUE),
+    SleepHours = as.integer(SleepHours)
+  )
+str(data.sleep)
+
+boxplot(
+  SleepHours ~ AgeCategory, 
+  data = data.sleep,
+  las = 2, 
+  main = "Sleep Hours by Age Category",
+  ylab = "Sleep hours"
+)
+
+boxplot(
+  SleepHours ~ factor(PhysicalActivities, ordered = TRUE), 
+  data = data.sleep,
+  las = 2, 
+  main = "Sleep Hours by Physical activities",
+  ylab = "Sleep hours"
+)
+
+boxplot(
+  SleepHours ~ GeneralHealth, 
+  data = data.sleep,
+  las = 2, 
+  main = "Sleep Hours by General Health",
+  ylab = "Sleep hours"
+)
+boxplot(
+  SleepHours ~ SmokerStatus, 
+  data = data.sleep,
+  las = 2, 
+  main = "Sleep Hours by Smoker Status",
+  ylab = "Sleep hours"
+)
+boxplot(
+  SleepHours ~ Sex, 
+  data = data.sleep,
+  las = 2, 
+  main = "Sleep Hours by Sex",
+  ylab = "Sleep hours"
+)
+```
+
+The plots show rather narrow distributions with a few outliers on the top (>20) and on the bottom (<3) hours. Since these are self reported values and the population is very large, a few such outliers are expected. They are not removed from the original dataset, although it is questionable if the general health is reported as excellent and at the same time extreme sleeping values are reported. It could also be due to misunderstanding the question or simply by typos from the person doing the telephone interview. 
+```{r}
+
+#3. Fit a Poisson Model 
+#Model Specification
+
+glm.sleep <- glm(
+  SleepHours ~
+    AgeCategory +
+    Sex +
+    BMI +
+    SmokerStatus +
+    HadDiabetes +
+    PhysicalActivities +
+    GeneralHealth +
+    DifficultyWalking +
+    HadKidneyDisease +
+    CovidPos,
+  data = df,
+  family = "poisson"
+)
+coef(glm.sleep)
+
+summary(glm.sleep)
+
+
+#Plot the model vs real values
+
+
+# Prepare the data
+
+df$pred_sleep <- predict(glm.sleep, type = "response")
+
+#create summary function for any predictor
+summarise_by_predictor <- function(data, predictor) {
+  data %>%
+    group_by({{ predictor }}) %>%
+    summarise(
+      obs_mean  = mean(SleepHours, na.rm = TRUE),
+      obs_sd    = sd(SleepHours, na.rm = TRUE),
+      pred_mean = mean(pred_sleep, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    rename(level = {{ predictor }})
+}
+```
+
+```{r}
+sum_age <- summarise_by_predictor(df, AgeCategory)
+sum_sex <- summarise_by_predictor(df, Sex)
+sum_BMI <- summarise_by_predictor(df, BMI)
+sum_smoke <- summarise_by_predictor(df, SmokerStatus)
+sum_diab <- summarise_by_predictor(df, HadDiabetes)
+sum_pa <- summarise_by_predictor(df, PhysicalActivities)
+sum_gh <- summarise_by_predictor(df, GeneralHealth)
+sum_dw <- summarise_by_predictor(df, DifficultyWalking)
+sum_kd <- summarise_by_predictor(df, HadKidneyDisease)
+sum_cov <- summarise_by_predictor(df, CovidPos)
+
+```
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+#--------------------------------------------------
+# Helper: summarise observed & predicted with 95% CI
+#--------------------------------------------------
+summarise_by_predictor <- function(data, predictor, predictor_name) {
+  data %>%
+    group_by({{ predictor }}) %>%
+    summarise(
+      n = n(),
+      obs_mean = mean(SleepHours, na.rm = TRUE),
+      obs_se   = sd(SleepHours, na.rm = TRUE) / sqrt(n),
+      obs_lwr  = obs_mean - 1.96 * obs_se,
+      obs_upr  = obs_mean + 1.96 * obs_se,
+      pred_mean = mean(pred_sleep, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    rename(level = {{ predictor }}) %>%
+    mutate(predictor = predictor_name)
+}
+
+#--------------------------------------------------
+# Build datasets
+#--------------------------------------------------
+sum_main <- bind_rows(
+  summarise_by_predictor(df, GeneralHealth, "General health"),
+  summarise_by_predictor(df, Sex, "Sex"),
+  summarise_by_predictor(df, SmokerStatus, "Smoking status"),
+  summarise_by_predictor(df, PhysicalActivities, "Physical activity")
+)
+
+sum_age <- summarise_by_predictor(df, AgeCategory, "Age category")
+
+#--------------------------------------------------
+# Shared axis limits
+#--------------------------------------------------
+axis_lim_main <- range(
+  c(sum_main$obs_lwr, sum_main$obs_upr, sum_main$pred_mean),
+  na.rm = TRUE
+)
+
+axis_lim_age <- range(
+  c(sum_age$obs_lwr, sum_age$obs_upr, sum_age$pred_mean),
+  na.rm = TRUE
+)
+
+#--------------------------------------------------
+# FIGURE 1: Main predictors (multi-panel)
+#--------------------------------------------------
+p_main <- ggplot(sum_main, aes(x = obs_mean, y = pred_mean)) +
+  
+  # Observed CI (BLUE)
+  geom_errorbarh(
+    aes(xmin = obs_lwr, xmax = obs_upr),
+    height = 0.03,
+    color = "blue"
+  ) +
+  
+  # Predicted mean (RED)
+  geom_point(color = "red", size = 3) +
+  
+  # Level labels
+  geom_text(
+    aes(label = level),
+    nudge_y = 0.05,
+    size = 3,
+    check_overlap = TRUE
+  ) +
+  
+  # 45° reference
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  
+  coord_equal(xlim = axis_lim_main, ylim = axis_lim_main) +
+  
+  facet_wrap(~ predictor, ncol = 1) +
+  
+  labs(
+    x = "Observed mean sleep hours (95% CI)",
+    y = "Predicted mean sleep hours (Poisson GLM)",
+    title = "Observed vs Predicted Mean Sleep Hours",
+    subtitle = "Blue = observed 95% CI, Red = model-predicted mean"
+  ) +
+  
+  theme_minimal(base_size = 13)
+
+#--------------------------------------------------
+# FIGURE 2: AgeCategory (separate)
+#--------------------------------------------------
+p_age <- ggplot(sum_age, aes(x = obs_mean, y = pred_mean)) +
+  
+  geom_errorbarh(
+    aes(xmin = obs_lwr, xmax = obs_upr),
+    height = 0.03,
+    color = "blue"
+  ) +
+  
+  geom_point(color = "red", size = 3) +
+  
+  geom_text(
+    aes(label = level),
+    nudge_y = 0.05,
+    size = 3
+  ) +
+  
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  
+  coord_equal(xlim = axis_lim_age, ylim = axis_lim_age) +
+  
+  labs(
+    x = "Observed mean sleep hours (95% CI)",
+    y = "Predicted mean sleep hours (Poisson GLM)",
+    title = "Observed vs Predicted Mean Sleep Hours by Age Category"
+  ) +
+  
+  theme_minimal(base_size = 13)
+
+#--------------------------------------------------
+# Print figures
+#--------------------------------------------------
+p_main
+p_age
+
+
+```
+If we look at the dispersion of 0.29 we find a strong underdispersion. This is mainly due to the sleep hours being bounded (1-24) and the responses highly heaped around 6,7,8 hours. Also the large sample produces very stable conditional means. So the Poisson variance assumption (Var = Mean) is too flexible for this constrained data. This results in the standard errors being conservative and the p-values larger than they should be. Assumptions from Proisson model are not violated in a dangerous way. The model is not corrected and Quasi-Poisson is not appropriate for underdispersion. 
+
+### Generalized Additive Model
+
+Samuel
+```{r gam-binomial, cache=TRUE}
+library(mgcv)
+
+gam_bin <- bam(
+  HadHeartAttack ~
+    s(BMI, k = 10) +
+    s(SleepHours, k = 10) +
+    AgeCategory + Sex + SmokerStatus +
+    HadDiabetes + PhysicalActivities + GeneralHealth +
+    DifficultyWalking + HadKidneyDisease + CovidPos,
+  data = train,
+  family = binomial,
+  method = "fREML"
+)
+
+summary(gam_bin)
+```
+
+```{r gam-plots, fig.width=7, fig.height=6, cache=TRUE}
+plot(gam_bin, pages = 1, shade = TRUE, seWithMean = TRUE, scale = 0)
+```
+
+
+<br>
+
+--------------------------------------------------------------------------------
+
+<br>
+
+# 4. Results and Discussion
+
+Focus on main results
+• Tables and figures should provide evidence for main result
+• Precise and correct description and interpretation of main results
+
+## 3.1. Risk prediction: Can a model reliably identify patients at increased risk?
+- Compare models
+GLM Binomial (Samuel)
+
+SVM (Luca)
+
+NN (Julia)
+
+## 3.2. Risk explanation: Which factors drive the risk, and how do these effects unfold?
+
+-compare linear model for SleepHours prediction with Poisson GLM via predicted mean mean sleep hours, direction and relative importance of predictors 
+LM (Luca)
+
+GLM Poisson (Julia)
+
+GAM (Samuel)
+
+<br>
+
+--------------------------------------------------------------------------------
+
+<br>
+
+# 5. Conclusion
+
+• Summary of most important findings
+• Put findings into a broader context
+• Ideas for further research
+
+- Important to tune the model to the use case and not just improve accuracy, in our application case it is more important to correctly predicte the positive heart attacks, even if it is at the cost of some false positives.
+
+- We recommend the following models for predicting heart attack and sleep hours...
+
+-Further research: include other predictors, maybe focus on the ones where an answer on the telephone can be assumed as reliable, Given the outliers of the sleeping hours, it is important to keep in mind what parameters are more personal perception and what can be considered as facts. E
+
+- Use case: for the screening in the hospital hard facts such as BMI, had kindney disease etc, are easy to measure. By collecting the same data in a controlled way the model using self reported data could be double checked. 
+<br>
+
+--------------------------------------------------------------------------------
+
+
+<br>
+
+# 6. Use of generative AI
+
+– how you used generative AI in redacting the group work (code-related questions,
+generate text, explain concepts…)
+– what was easy/hard/impossible to do with generative AI
+– what you had to pay attention to/be critical about when using the results obtained
+through the use of generative AI
+
+Julia:
+I used ChatGPT for different supports: Explain code e.g. from labs or also for suggested code from ChatGPT itself. This works very well. For the generation of code it is more difficult, I think it is crutial to have a clear concept in mind what exactly you want to model or code and then use GenAI instead of saying here is the data, I need to use this model, give me the code. This usually doesn't work so well. Also it is important to really understand the suggested code to check its plausibility. Sometimes with a follow-up question suddenly a different approach is suggested. I personally don't use it to provide complete paragraphs and model interpretations.  
+<br>
+
+--------------------------------------------------------------------------------
