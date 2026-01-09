@@ -1,0 +1,11 @@
+# RStudio files
+.Rhistory
+.RData
+
+# Cache and rendered artifacts
+*_cache/
+*_files/
+*.html
+
+# Large datasets
+*.csv
