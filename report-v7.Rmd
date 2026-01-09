@@ -96,7 +96,7 @@ library(ggrepel)
 ```{r loading-data, cache=TRUE}
 # Loading data
 #data <- read.csv("heart_2022_no_nans.csv")
-data <- read.csv(file = "C:\\Users\\stude\\Desktop\\MPM01\\2022\\heart_2022_no_nans.csv")
+data <- read.csv(file = "/Users/lucasignorini/Documents/MSc_ids/Sem_3/ML1/Gruppenarbeit/Data/archive/2022/heart_2022_no_nans.csv")
 
 skim(data)
 ```
@@ -250,7 +250,8 @@ This section focuses on the predictive task of identifying individuals at increa
 A binomial generalized linear model (GLM) is first applied as an interpretable baseline, providing a reference for predictive performance under standard statistical assumptions. Subsequently, more flexible machine learning models, including a support vector machine (SVM) and a neural network (NN), are trained to evaluate whether increased model complexity leads to improved predictive accuracy. Model performance is compared using appropriate classification metrics, with particular emphasis on ROC curves and AUC.
 
 ## Generalized linear model Binomial
-
+<details>
+<summary><b>Show Code & Output: Generalized linear model Binomial </b></summary>
 ```{r glm-binomial, cache=TRUE}
 glm_bin <- glm(
   HadHeartAttack ~ AgeCategory + Sex + BMI + SmokerStatus +
@@ -262,6 +263,8 @@ glm_bin <- glm(
 
 summary(glm_bin)
 ```
+</details>
+<br>
 
 Age is the strongest driver in the baseline GLM: compared to the reference (youngest) group, coefficients increase monotonically across age categories, indicating substantially higher odds of a reported heart attack with increasing age.
 
@@ -271,6 +274,8 @@ Sex shows a clear association: SexMale is strongly positive (β ≈ 0.80; OR ≈
 
 Disclaimer: These are associations from observational, self-reported data and should not be interpreted causally. We do not focus on single-variable interpretation; instead, we highlight a few representative effects to illustrate that the baseline model behaves in a realistic and expected way before comparing predictive performance across models.
 
+<details>
+<summary><b>Show Code: GLM Binomial ROC </b></summary>
 ```{r glm-roc, cache=TRUE}
 library(pROC)
 
@@ -281,10 +286,14 @@ roc_glm <- roc(test$HadHeartAttack, prob_glm)
 plot(roc_glm, main = "ROC Curve — GLM Binomial")
 auc(roc_glm)
 ```
+</details>
+<br>
 
 The ROC curve shows clear separation from the diagonal, indicating good discriminatory ability of the baseline GLM.
 An AUC of 0.8249 suggests that the model reliably distinguishes between individuals with and without a reported heart attack and provides a strong baseline for further comparison.
 
+<details>
+<summary><b>Show Code: GLM Binomial BMI-curve </b></summary>
 ```{r glm-bmi-curve, cache=TRUE}
 bmi_grid <- data.frame(
   BMI                = seq(15, 50, length.out = 150),
@@ -308,6 +317,8 @@ plot(
   main = "Predicted Heart Attack Risk vs BMI (GLM)"
 )
 ```
+</details>
+<br>
 
 The predicted risk increases only marginally with BMI in the binomial GLM, and the corresponding coefficient is not statistically significant, indicating a weak linear association.
 Although exploratory analysis suggests small differences across BMI ranges, this example illustrates that a strictly linear specification may be insufficient and motivates the use of more flexible, non-linear models to capture potential effects.
@@ -382,9 +393,12 @@ svm_tuned <- train(
 ```
 </details>
 
+<details>
+<summary><b>Show Output: SVM Model, tuned sigma and C</b></summary>
 ```{r, SVM_tuned, cache=TRUE}
 svm_tuned  # shows best sigma/C by ROC
 ```
+</details>
 
 ```{r, SVM model evaluation, cache=TRUE, echo=FALSE}
 # -----------------------------------------------------------
@@ -683,17 +697,13 @@ For the first model the same parameters as in the German Credit example from the
 
 <details>
 <summary>Show output</summary>
-```{r, Neural Network model}
+```{r, Neural Network model, cache=TRUE}
 #the train proportion of the data defined above is used to train the model
 
 set.seed(412)
 HeartAttack_net <- nnet(HadHeartAttack ~ ., data = train, size=(16), maxit=10000, range=0.1, decay=5e-4, MaxNWts = 2000)
 ```
 </details>
-
-```{r, show the network}
-#plot(HeartAttack_net)
-```
 
 ```{r,echo=TRUE, results='hide'}
 HeartAttack_net
@@ -702,20 +712,20 @@ The model converged after 690 iterations.
 
 We are mostly interested in correctly predicting the heart attack cases correctly. It could be fatal if a patient is labeled no risk for heart attack that actually has a high risk. On the other hand it is not so tragic if a person with moderate risk is labelled as high risk, this could motivate a healthier lifestyle. 
 
-#### Make predictions
+### Make predictions
 
-```{r} 
+```{r, cache=TRUE} 
 pred <- predict(HeartAttack_net, test, type="class")
 
 confusionMatrix(as.factor(pred), as.factor(test$HadHeartAttack))
 ```
 The model is very good at identifying the "No heart attack" cases with sensitivity value of 0.944. At the same time the model misses 68% of heart attack cases, wit a specificity value of 0.321. This is not enough for a risk prediction in medical modeling. This is also represented in the ROC curve shown below.     
 
-#### ROC Curves
+### ROC Curves
 
 The Receiver Operating Characteristic is a useful tool to indicate model quality. For this we plot sensitivity against 1-specificity.
 
-```{r,ROC curves}
+```{r,ROC curves, cache=TRUE}
 
 pred_raw <- predict(HeartAttack_net, test, decision.values=TRUE, type = "raw")
 pred <- ROCR::prediction(pred_raw, test$HadHeartAttack)
@@ -727,7 +737,7 @@ abline(a=0, b=1)
 
 The main reasons for this are the following: first we have a high class imbalance (80/20), even tough undersampling was applied to the original data. Also the default classification threshold is 0.5, which is not appropriate in this case. The model as it is optimised for accuracy, which gives more weight to the correct prediction of the most cases of no heart attack. 
 
-#### Optimised neural network model
+### Optimised neural network model
 
 To correct for these factors, the following parameters were changed:
 
@@ -739,9 +749,10 @@ Since there are still mostly "HadHeartAttack No" cases used for training, the "H
 
 3. Optimizing the parameters of the model
 There are imbalanced classes and missing a heart attack is worse than a false alarm and therefore accuracy is misleading. The ROC AUC is optimized and probabilities used. The main parameters to be optimized are the size and decay. 
+
 <details>
 <summary>Show analysis</summary>
-```{r,collapse =TRUE}
+```{r,nn analysis}
 
 # Define cross-validation strategy
 #ctrl <- trainControl(
@@ -781,10 +792,11 @@ There are imbalanced classes and missing a heart attack is worse than a false al
 </details>
 
 The model HeartAttack_v2_net was then trained with the optimized parameters.
+<br>
 
 <details>
 <summary>Show output</summary>
-```{r}
+```{r, cache=TRUE}
 # Inspect optimal parameters
 #nnet_caret
 
@@ -799,9 +811,9 @@ HeartAttack_v2_net <- nnet(HadHeartAttack ~ ., data = train, size=(4), maxit=100
 
 Now the model converges after 320 iterations. It then is used to make predictions on the test part of the dataset. 
 
-#### Make predictions
+### Make predictions
 
-```{r} 
+```{r, cache=TRUE} 
 pred_v2 <- predict(HeartAttack_v2_net, test, type="raw")
 
 pred_raw <- predict(HeartAttack_net, test, decision.values=TRUE, type = "raw")
@@ -811,7 +823,7 @@ plot(perf, lwd=2, col="blue")
 abline(a=0, b=1)
 ```
 
-```{r, Area under curve ROC optimized}  
+```{r, Area under curve ROC optimized, cache=TRUE}  
 
 library(pROC)
 pred_class <- ifelse(pred_v2 > 0.2, "Yes", "No")
@@ -830,6 +842,12 @@ coords(roc_obj, x = c(0.05, 0.1, 0.15, 0.20, 0.25, 0.30),
 ``` 
 
 Looking at the results of using different thresholds, there is a trade off between high sensitivity (correct detection of HadHeartAttack Yes) and specificity (correct dismissing of HadHeartAttack No). A good compromise of detecting the risk of a heart attack and not have too many false alarms, is a threshold of 0.2 or 0.15. Looking at the balanced accuracy, the maximum is at a threshold of 0.2, balancing best the two error types. Like this, the correct predicted HadHeartAttack are 79 %, and the correct dismiss of HadHeartAttack Yes is still at 71 %. Also a threshold of 0.15 could be applied if the false positives are considered as acceptable. 
+
+<br>
+
+----------------------------------------------------------
+
+<br>
 
 # Regression-Based Modeling
 
@@ -900,9 +918,13 @@ lm_bmi_healthy <- lm(
 </details>
 <br>
 
+<details>
+<summary>Show output summary</summary>
 ```{r lm_bim output, cache=TRUE}
 summary(lm_bmi_healthy)
 ```
+</details>
+<br>
 
 Using a healthy reference profile (young, female, active, excellent health, never smoked), the model reveals clear associations with BMI. 
 
@@ -1243,9 +1265,13 @@ lm_sleep_healthy <- lm(
 </details>
 <br>
 
+<details>
+<summary>Show output summary</summary>
 ```{r lm SleepHours Output, fig.height=14, fig.width=8, cache=TRUE}
 summary(lm_sleep_healthy)
 ```
+</details>
+<br>
 
 Sleep duration varies systematically across age groups: adults aged 25–54 sleep about 0.1–0.25 hours less than those aged 18–24, whereas older adults sleep increasingly more, reaching +0.61 hours in those 80+. General health is strongly associated with sleep, with individuals in Poor health sleeping 0.49 hours less than those in Excellent health. Difficulty walking and current smoking show modest reductions of 0.12 hours and 0.10–0.14 hours, respectively, while sex and physical activity have no meaningful effects. Although the model’s explanatory power is limited, the observed associations provide clear patterns that align with the nonlinear effects later captured in the GAM.
 <br>
@@ -1613,7 +1639,8 @@ boxplot(
   ylab = "Sleep hours"
 )
 ```
-
+</details>
+<br>
 
 <details>
 <summary><b>Show code: GLM poisson model</b></summary>
@@ -1641,8 +1668,8 @@ coef(glm.sleep)
 
 summary(glm.sleep)
 ```
-
 </details>
+<br>
 
 After adjusting for health and lifestyle factors, predicted mean sleep hours differ modestly across the population:
 
@@ -1659,7 +1686,6 @@ If we look at the dispersion of 0.29 we find a strong underdispersion. This is m
 
 <details>
 <summary><b>Show code: Generate Age & Main Predictor Plots</b></summary>
-
 ```{r, age-and-main-plots, echo=TRUE, message=FALSE, warning=FALSE}
 #----------------------------------------
 # 1. Add predicted values from the Poisson model
@@ -1766,7 +1792,6 @@ for(pred in predictors){
   plots_list[[pred]] <- p
 }
 ```
-
 </details>
 
 ```{r,show plots} 
@@ -1776,7 +1801,16 @@ p_age # Age plot
 for(p in plots_list) print(p) # Main predictor plots
 ```
 
+<br>
+
+-----------------------------------------------------
+
+<br>
+
 ## Generalized Additive Model 
+
+<details>
+<summary>Show Code & Summary: GAM </summary>
 ```{r gam-binomial, cache=TRUE}
 library(mgcv)
 
@@ -1794,6 +1828,8 @@ gam_bin <- bam(
 
 summary(gam_bin)
 ```
+</details>
+<br>
 
 To assess whether nonlinear modeling improves risk prediction, we compared the binomial GLM with a binomial GAM using the same set of predictors. While the GAM allows flexible nonlinear effects for continuous variables such as BMI and sleep duration, it did not lead to a clear improvement in predictive performance compared to the GLM. The binomial GLM already achieved strong discrimination on the test set (AUC ≈ 0.83), outperforming the more complex machine learning models considered in this study, such as the tuned SVM.
 
@@ -1821,7 +1857,9 @@ In particular, sleep duration shows a clear nonlinear association with heart att
 
 **Model performance**
 
-The binomial GLM achieved the highest and most stable predictive performance on the test set with a ROC–AUC of approximately 0.82. The tuned radial SVM reached a slightly lower discrimination (ROC–AUC ≈ 0.80) and therefore did not outperform the baseline. The binomial GAM achieved comparable ROC performance to the GLM, indicating no improvement in overall discrimination from introducing nonlinear smooth terms. (Neural Network results are pending final tuning and evaluation.)
+The binomial GLM achieved the highest and most stable predictive performance on the test set with a ROC–AUC of approximately 0.82. The tuned radial SVM reached a slightly lower discrimination (ROC–AUC ≈ 0.80) and therefore did not outperform the baseline. The binomial GAM achieved comparable ROC performance to the GLM, indicating no improvement in overall discrimination from introducing nonlinear smooth terms.
+
+For models that output probabilities (SVM and NN), overall performance depends not only on discrimination but also on the chosen classification threshold. In the context of heart attack risk prediction, where missed cases are particularly costly, lower thresholds improve sensitivity. For the Neural Network, a threshold around 0.2 yields the best balance between sensitivity and specificity, achieving the highest balanced accuracy. If false positives are acceptable, an even lower threshold (e.g., 0.15) may be preferred to further reduce the risk of missed heart attack cases.
 
 **Effect modeling**
 
@@ -1847,15 +1885,13 @@ The strong dependence on decision thresholds further emphasizes that model usefu
 
 # Conclusion
 
-In this study, the binomial GLM emerged as the most suitable model, offering the best balance between predictive performance, stability, and interpretability. More complex models (SVM, GAM) did not provide meaningful gains in discrimination, indicating that increased model complexity is not necessarily beneficial for this task. Overall, the findings underscore the importance of aligning model choice and evaluation criteria with the intended risk prediction objective rather than model sophistication alone.
+In this study, the binomial GLM emerged as the most suitable model, offering the best balance between predictive performance, stability, and interpretability. More complex models (SVM, GAM, ANN) did not provide meaningful gains in discrimination, indicating that increased model complexity is not necessarily beneficial for this task. Overall, the findings underscore the importance of aligning model choice and evaluation criteria with the intended risk prediction objective rather than model sophistication alone.
 
 **Future work could be:**
 
 - evaluate probability calibration under the original class distribution
 - explore alternative imbalance handling (e.g., class weighting or SMOTE)
 - validate results on clinically verified data to assess generalization beyond self-reported survey responses.
-
--Further research: include other predictors, maybe focus on the ones where an answer on the telephone can be assumed as reliable, Given the outliers of the sleeping hours, it is important to keep in mind what parameters are more personal perception and what can be considered as facts.
 
 **Learnings**
 
@@ -1872,14 +1908,7 @@ In this study, the binomial GLM emerged as the most suitable model, offering the
 
 # Use of generative AI
 
-– how you used generative AI in redacting the group work (code-related questions,
-generate text, explain concepts…)
-– what was easy/hard/impossible to do with generative AI
-– what you had to pay attention to/be critical about when using the results obtained
-through the use of generative AI
-
-Julia:
-I used ChatGPT for different supports: Explain code e.g. from labs or also for suggested code from ChatGPT itself. This works very well. For the generation of code it is more difficult, I think it is crutial to have a clear concept in mind what exactly you want to model or code and then use GenAI instead of saying here is the data, I need to use this model, give me the code. This usually doesn't work so well. Also it is important to really understand the suggested code to check its plausibility. Sometimes with a follow-up question suddenly a different approach is suggested. I personally don't use it to provide complete paragraphs and model interpretations.  
+We used ChatGPT for different supports: Explain code e.g. from labs or also for suggested code from ChatGPT itself. This works very well. For the generation of code it is more difficult, we think it is crutial to have a clear concept in mind what exactly you want to model or code and then use GenAI instead of saying here is the data, I need to use this model, give me the code. This usually doesn't work so well. Also it is important to really understand the suggested code to check its plausibility. Sometimes with a follow-up question suddenly a different approach is suggested.
 <br>
 
 
@@ -1888,4 +1917,4 @@ I used ChatGPT for different supports: Explain code e.g. from labs or also for s
 ```{r,Sesion Info}
 sessionInfo()
 ```
-<details/>
+</details>
